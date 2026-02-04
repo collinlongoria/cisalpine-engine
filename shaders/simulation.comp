@@ -1,0 +1,87 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
+layout(rgba8ui, binding = 1) uniform writeonly uimage2D stateOut;
+
+uniform vec2 worldSize;
+
+// Element types
+const uint EMPTY = 0u;
+const uint SAND = 1u;
+
+uvec4 getState(ivec2 pos) {
+    if (pos.x < 0 || pos.x >= int(worldSize.x) ||
+        pos.y < 0 || pos.y >= int(worldSize.y)) {
+        // Treat out of bounds as solid (can't move into it)
+        return uvec4(255u, 0u, 0u, 0u);
+    }
+    return imageLoad(stateIn, pos);
+}
+
+bool isEmpty(ivec2 pos) {
+    return getState(pos).r == EMPTY;
+}
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+
+    if (pos.x >= int(worldSize.x) || pos.y >= int(worldSize.y)) {
+        return;
+    }
+
+    uvec4 current = getState(pos);
+    uint element = current.r;
+
+    // Default: keep current state
+    uvec4 op = current;
+
+    if (element == SAND) {
+        // Sand falls down, or diagonally if blocked
+        ivec2 below = pos + ivec2(0, -1);
+        ivec2 belowLeft = pos + ivec2(-1, -1);
+        ivec2 belowRight = pos + ivec2(1, -1);
+
+        if (isEmpty(below)) {
+            // Fall straight down - become empty, let cell below pull us
+            op = uvec4(EMPTY, 0u, 0u, 0u);
+        } else if (isEmpty(belowLeft) && isEmpty(belowRight)) {
+            // Both diagonals open - pick one (alternating based on position for variety)
+            op = uvec4(EMPTY, 0u, 0u, 0u);
+        } else if (isEmpty(belowLeft)) {
+            op = uvec4(EMPTY, 0u, 0u, 0u);
+        } else if (isEmpty(belowRight)) {
+            op = uvec4(EMPTY, 0u, 0u, 0u);
+        }
+        // else: stay in place
+    }
+    else if (element == EMPTY) {
+        // Check if something should fall into this cell
+        ivec2 above = pos + ivec2(0, 1);
+        ivec2 aboveLeft = pos + ivec2(-1, 1);
+        ivec2 aboveRight = pos + ivec2(1, 1);
+
+        uvec4 aboveState = getState(above);
+        uvec4 aboveLeftState = getState(aboveLeft);
+        uvec4 aboveRightState = getState(aboveRight);
+
+        if (aboveState.r == SAND) {
+            // Sand falls straight down into us
+            op = aboveState;
+        } else if (aboveLeftState.r == SAND && !isEmpty(above + ivec2(-1, -1))) {
+            // Sand from above-left falls diagonally (only if its straight-down is blocked)
+            ivec2 aboveLeftBelow = aboveLeft + ivec2(0, -1);
+            if (!isEmpty(aboveLeftBelow)) {
+                op = aboveLeftState;
+            }
+        } else if (aboveRightState.r == SAND && !isEmpty(above + ivec2(1, -1))) {
+            ivec2 aboveRightBelow = aboveRight + ivec2(0, -1);
+            if (!isEmpty(aboveRightBelow)) {
+                op = aboveRightState;
+            }
+        }
+    }
+
+    imageStore(stateOut, pos, op);
+}

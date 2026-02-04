@@ -1,0 +1,38 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
+layout(rgba8, binding = 1) uniform writeonly image2D displayOut;
+
+// Element types
+const uint EMPTY = 0u;
+const uint SAND = 1u;
+
+vec4 getColor(uint element) {
+    switch (element) {
+        case EMPTY:
+            return vec4(0.05, 0.05, 0.08, 1.0);  // Dark background
+        case SAND:
+            return vec4(0.86, 0.78, 0.45, 1.0);  // Sandy yellow
+        default:
+            return vec4(1.0, 0.0, 1.0, 1.0);     // Magenta for unknown
+    }
+}
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(stateIn);
+
+    if (pos.x >= size.x || pos.y >= size.y) {
+        return;
+    }
+
+    uvec4 state = imageLoad(stateIn, pos);
+    vec4 color = getColor(state.r);
+
+    // Could add variation based on state.g, state.b, etc.
+    // For now, just use element color
+
+    imageStore(displayOut, pos, color);
+}

@@ -14,12 +14,16 @@
 #include <iostream>
 
 int main() {
+    cisalpine::App app;
+
     try {
-        cisalpine::App app{};
-        app.init();
-        app.update();
+        app.init(256,256);
+        app.run();
         app.shutdown();
     }  catch (const std::exception& e) {
-        std::cerr << "[FATAL] " << e.what() << '\n';
+        std::cerr << "Fatal error: " << e.what() << std::endl;
+        return 1;
     }
+
+    return 0;
 }
