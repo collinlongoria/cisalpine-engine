@@ -52,8 +52,13 @@ private:
 
     UILayout layout;
 
+    // Timing
+    float lastFrameTime = 0.0f;
+
     // Input state
     bool isDrawing = false;
+    Element selectedElement = Element::Sand;
+    int brushSize = 3;
 
     void calculateWindowSize(int& windowWidth, int& windowHeight);
     void updateLayout(int windowWidth, int windowHeight);
@@ -62,6 +67,9 @@ private:
 
     // Convert screen coords to world coords
     bool screenToWorld(double screenX, double screenY, int& worldX, int& worldY);
+
+    // UI Helpers
+    const char* getElementName(Element elem) const;
 };
 
 }

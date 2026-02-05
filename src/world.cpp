@@ -22,6 +22,7 @@ World::World(int width, int height)
 
 World::~World() {
     if (stateTextures[0]) glDeleteTextures(2, stateTextures);
+    if (colorTexture) glDeleteTextures(1, &colorTexture);
     if (displayTexture) glDeleteTextures(1, &displayTexture);
     if (quadVAO) glDeleteVertexArrays(1, &quadVAO);
     if (quadVBO) glDeleteBuffers(1, &quadVBO);
@@ -35,6 +36,10 @@ bool World::init() {
     }
     if (!renderShader.loadCompute("shaders/render.comp")) {
         std::cerr << "Failed to load render shader" << std::endl;
+        return false;
+    }
+    if (!lightingShader.loadCompute("shaders/lighting.comp")) {
+        std::cerr << "Failed to load lighting shader" << std::endl;
         return false;
     }
     if (!quadShader.loadFromFile("shaders/quad.vert", "shaders/quad.frag")) {
@@ -65,6 +70,15 @@ void World::createTextures() {
             GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, clearData.data());
     }
 
+    // Create color texture (RGBA8)
+    glGenTextures(1, &colorTexture);
+    glBindTexture(GL_TEXTURE_2D, colorTexture);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, worldWidth, worldHeight);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
     // Create display texture (RGBA8)
     glGenTextures(1, &displayTexture);
     glBindTexture(GL_TEXTURE_2D, displayTexture);
@@ -80,13 +94,13 @@ void World::createTextures() {
 void World::createQuad() {
     float vertices[] = {
         // pos       // uv
-        -1.0f, 1.0f, 0.0f, 1.0f,
+        -1.0f,  1.0f, 0.0f, 1.0f,
         -1.0f, -1.0f, 0.0f, 0.0f,
-        1.0f, -1.0f, 1.0f, 0.0f,
+         1.0f, -1.0f, 1.0f, 0.0f,
 
-        -1.0f, 1.0f, 0.0f, 1.0f,
-        1.0f, -1.0f, 1.0f, 0.0f,
-        1.0f, 1.0f, 1.0f, 1.0f
+        -1.0f,  1.0f, 0.0f, 1.0f,
+         1.0f, -1.0f, 1.0f, 0.0f,
+         1.0f,  1.0f, 1.0f, 1.0f
     };
 
     glGenVertexArrays(1, &quadVAO);
@@ -119,7 +133,18 @@ void World::spawnParticle(int x, int y, Element element) {
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
-void World::update() {
+void World::clear() {
+    std::vector<uint8_t> clearData(worldWidth * worldHeight * 4, 0);
+
+    for (int i = 0; i < 2; i++) {
+        glBindTexture(GL_TEXTURE_2D, stateTextures[i]);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
+            GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, clearData.data());
+    }
+    glBindTexture(GL_TEXTURE_2D, 0);
+}
+
+void World::simulationStep() {
     int nextBuffer = 1 - currentBuffer;
 
     // Bind textures to image units
@@ -129,6 +154,10 @@ void World::update() {
     // Run simulation shader
     simulationShader.use();
     simulationShader.setVec2("worldSize", static_cast<float>(worldWidth), static_cast<float>(worldHeight));
+    simulationShader.setFloat("time", simulationTime);
+    simulationShader.setUint("frameCount", frameCount);
+    simulationShader.setFloat("waterViscosity", simSettings.waterViscosity);
+    simulationShader.setFloat("lavaViscosity", simSettings.lavaViscosity);
 
     GLuint workGroupsX = (worldWidth + 15) / 16;
     GLuint workGroupsY = (worldHeight + 15) / 16;
@@ -137,22 +166,54 @@ void World::update() {
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
     swapBuffers();
+    frameCount++;
+}
+
+void World::update(float dt) {
+    accumulatedTime += dt;
+    simulationTime += dt;
+
+    // Fixed timestep simulation
+    while (accumulatedTime >= FIXED_TIMESTEP) {
+        simulationStep();
+        accumulatedTime -= FIXED_TIMESTEP;
+    }
 }
 
 void World::render(int screenX, int screenY, int screenWidth, int screenHeight) {
-    // Convert state texture to display colors
-    glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
-    glBindImageTexture(1, displayTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
-
-    renderShader.use();
-
     GLuint workGroupsX = (worldWidth + 15) / 16;
     GLuint workGroupsY = (worldHeight + 15) / 16;
-    glDispatchCompute(workGroupsX, workGroupsY, 1);
 
+    // Pass 1: Convert state texture to colors
+    glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
+    glBindImageTexture(1, colorTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+
+    renderShader.use();
+    renderShader.setVec4("backgroundColor",
+        renderSettingsData.backgroundColor.r,
+        renderSettingsData.backgroundColor.g,
+        renderSettingsData.backgroundColor.b,
+        renderSettingsData.backgroundColor.a);
+    renderShader.setFloat("time", simulationTime);
+
+    glDispatchCompute(workGroupsX, workGroupsY, 1);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-    // Draw quad with display texture
+    // Pass 2: Apply lighting/glow
+    glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
+    glBindImageTexture(1, colorTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+    glBindImageTexture(2, displayTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+
+    lightingShader.use();
+    lightingShader.setBool("glowEnabled", renderSettingsData.glowEnabled);
+    lightingShader.setFloat("glowIntensity", renderSettingsData.glowIntensity);
+    lightingShader.setFloat("glowRadius", renderSettingsData.glowRadius);
+    lightingShader.setFloat("time", simulationTime);
+
+    glDispatchCompute(workGroupsX, workGroupsY, 1);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+    // Pass 3: Draw quad with display texture
     glViewport(screenX, screenY, screenWidth, screenHeight);
 
     quadShader.use();

@@ -38,7 +38,9 @@ public:
     GLuint id() const { return programId; }
 
     // Uniform setters
+    void setBool(std::string_view name, bool value) const;
     void setInt(std::string_view name, int value) const;
+    void setUint(std::string_view name, uint32_t value) const;
     void setFloat(std::string_view name, float value) const;
     void setVec2(std::string_view name, float x, float y) const;
     void setVec4(std::string_view name, float x, float y, float z, float w) const;

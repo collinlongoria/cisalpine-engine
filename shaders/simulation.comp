@@ -5,83 +5,270 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8ui, binding = 1) uniform writeonly uimage2D stateOut;
 
-uniform vec2 worldSize;
+uniform vec2  worldSize;
+uniform float time;       // randomization seed
+uniform uint  frameCount; // deterministic tie-break / variation
 
-// Element types
+// Viscosity controls (0 = runny, 1 = viscous)
+uniform float waterViscosity;
+uniform float lavaViscosity;
+
+// Element types (match your C++)
 const uint EMPTY = 0u;
-const uint SAND = 1u;
+const uint SAND  = 1u;
+const uint STONE = 2u;
+const uint WATER = 3u;
+const uint LAVA  = 4u;
+
+// ----------------- helpers -----------------
+bool inBounds(ivec2 p) {
+    return (p.x >= 0 && p.x < int(worldSize.x) &&
+            p.y >= 0 && p.y < int(worldSize.y));
+}
+
+// Pseudo-random based on position and time (your original)
+float random01(ivec2 pos) {
+    return fract(sin(dot(vec2(pos) + time, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Deterministic hash for conflict resolution
+uint hashU32(uint x) {
+    x ^= x >> 16;
+    x *= 2246822519u;
+    x ^= x >> 13;
+    x *= 3266489917u;
+    x ^= x >> 16;
+    return x;
+}
+uint hash2u(uvec2 v) {
+    return hashU32(v.x ^ (v.y + 0x9e3779b9u + (v.x<<6) + (v.x>>2)));
+}
 
 uvec4 getState(ivec2 pos) {
-    if (pos.x < 0 || pos.x >= int(worldSize.x) ||
-        pos.y < 0 || pos.y >= int(worldSize.y)) {
-        // Treat out of bounds as solid (can't move into it)
-        return uvec4(255u, 0u, 0u, 0u);
+    if (!inBounds(pos)) {
+        return uvec4(255u, 0u, 0u, 0u); // solid boundary sentinel
     }
     return imageLoad(stateIn, pos);
 }
 
-bool isEmpty(ivec2 pos) {
-    return getState(pos).r == EMPTY;
+uint getElement(ivec2 pos) { return getState(pos).r; }
+
+bool isLiquid(uint e) { return e == WATER || e == LAVA; }
+bool isSolid(uint e)  { return e == STONE || e == 255u; } // include boundary sentinel
+bool isEmptyElem(uint e) { return e == EMPTY; }
+
+float viscosityOf(uint e) {
+    if (e == WATER) return clamp(waterViscosity, 0.0, 1.0);
+    if (e == LAVA)  return clamp(lavaViscosity,  0.0, 1.0);
+    return 1.0; // not used
 }
 
+bool canDisplace(uint mover, uint target) {
+    if (target == EMPTY) return true;
+    // Sand/lava sink through water
+    if ((mover == SAND || mover == LAVA) && target == WATER) return true;
+    return false;
+}
+
+// ----------------- conservative movement -----------------
+// NOTE: your "down" is (0, -1) based on existing shader
+ivec2 desiredDest(ivec2 src, uint elem) {
+    // immovable
+    if (elem == EMPTY || elem == STONE || elem == 255u) return src;
+
+    ivec2 below      = src + ivec2(0, -1);
+    ivec2 belowLeft  = src + ivec2(-1, -1);
+    ivec2 belowRight = src + ivec2( 1, -1);
+    ivec2 left       = src + ivec2(-1,  0);
+    ivec2 right      = src + ivec2( 1,  0);
+
+    // SAND: deterministic granular fall with diagonal preference
+    if (elem == SAND) {
+        uint b  = getElement(below);
+        if (canDisplace(SAND, b)) return below;
+
+        uint bl = getElement(belowLeft);
+        uint br = getElement(belowRight);
+
+        // deterministic left/right order
+        bool leftFirst = (hash2u(uvec2(src) ^ uvec2(frameCount, frameCount*17u)) & 1u) == 0u;
+        if (leftFirst) {
+            if (canDisplace(SAND, bl)) return belowLeft;
+            if (canDisplace(SAND, br)) return belowRight;
+        } else {
+            if (canDisplace(SAND, br)) return belowRight;
+            if (canDisplace(SAND, bl)) return belowLeft;
+        }
+        return src;
+    }
+
+    // LIQUIDS: gravity, then diagonal, then sideways (viscosity controls)
+    if (isLiquid(elem)) {
+        // gravity first
+        if (getElement(below) == EMPTY) return below;
+
+        float visc = viscosityOf(elem);
+
+        // Higher viscosity => less diagonal & sideways movement
+        float diagChance    = mix(0.70, 0.05, visc);
+        float lateralChance = mix(0.90, 0.10, visc);
+
+        // deterministic left/right choice
+        bool leftFirst = (hash2u(uvec2(src) ^ uvec2(frameCount, frameCount*31u)) & 1u) == 0u;
+
+        float r = random01(src);
+
+        // diagonals (only if the space is empty)
+        if (r < diagChance) {
+            if (leftFirst) {
+                if (getElement(belowLeft) == EMPTY)  return belowLeft;
+                if (getElement(belowRight) == EMPTY) return belowRight;
+            } else {
+                if (getElement(belowRight) == EMPTY) return belowRight;
+                if (getElement(belowLeft) == EMPTY)  return belowLeft;
+            }
+        }
+
+        // sideways
+        float r2 = random01(src ^ ivec2(1337, 7331));
+        if (r2 < lateralChance) {
+            if (leftFirst) {
+                if (getElement(left)  == EMPTY) return left;
+                if (getElement(right) == EMPTY) return right;
+            } else {
+                if (getElement(right) == EMPTY) return right;
+                if (getElement(left)  == EMPTY) return left;
+            }
+        }
+        return src;
+    }
+
+    // LAVA also has a "slow" chance gate (in addition to viscosity)
+    if (elem == LAVA) { /* unreachable because isLiquid catches it */ }
+
+    return src;
+}
+
+bool sourceProposesTo(ivec2 src, ivec2 dest) {
+    if (!inBounds(src)) return false;
+    uint e = getElement(src);
+    if (e == EMPTY || e == STONE || e == 255u) return false;
+
+    ivec2 d = desiredDest(src, e);
+    if (d != dest) return false;
+
+    // Must be able to displace what's currently in dest
+    uint target = getElement(dest);
+    return canDisplace(e, target);
+}
+
+ivec2 pickWinnerForDest(ivec2 dest) {
+    // consider neighbors within one step that could propose into dest
+    ivec2 best = ivec2(2147483647); // sentinel meaning "none"
+    uint bestScore = 0u;
+    bool found = false;
+
+    for (int oy = -1; oy <= 1; ++oy) {
+        for (int ox = -1; ox <= 1; ++ox) {
+            if (ox == 0 && oy == 0) continue;
+            ivec2 src = dest + ivec2(ox, oy);
+            if (!sourceProposesTo(src, dest)) continue;
+
+            uint score = hash2u(uvec2(src) ^ uvec2(dest) ^ uvec2(frameCount, frameCount*101u));
+            if (!found || score > bestScore) {
+                found = true;
+                bestScore = score;
+                best = src;
+            }
+        }
+    }
+
+    return found ? best : ivec2(2147483647);
+}
+
+// ----------------- main -----------------
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (!inBounds(pos)) return;
 
-    if (pos.x >= int(worldSize.x) || pos.y >= int(worldSize.y)) {
+    uvec4 cur = getState(pos);
+    uint elem = cur.r;
+
+    // ---- interactions first (your rules) ----
+    // STONE touched by LAVA slowly becomes LAVA
+    if (elem == STONE) {
+        ivec2 below = pos + ivec2(0, -1);
+        ivec2 above = pos + ivec2(0,  1);
+        ivec2 left  = pos + ivec2(-1, 0);
+        ivec2 right = pos + ivec2( 1, 0);
+
+        bool touchingLava = (getElement(above) == LAVA ||
+                             getElement(below) == LAVA ||
+                             getElement(left)  == LAVA ||
+                             getElement(right) == LAVA);
+        if (touchingLava && random01(pos) < 0.02) {
+            imageStore(stateOut, pos, uvec4(LAVA, 0u, 128u, 0u));
+            return;
+        }
+    }
+
+    // WATER touching LAVA -> steam (empty)
+    if (elem == WATER) {
+        ivec2 below = pos + ivec2(0, -1);
+        ivec2 above = pos + ivec2(0,  1);
+        ivec2 left  = pos + ivec2(-1, 0);
+        ivec2 right = pos + ivec2( 1, 0);
+
+        bool touchingLava = (getElement(above) == LAVA ||
+                             getElement(below) == LAVA ||
+                             getElement(left)  == LAVA ||
+                             getElement(right) == LAVA);
+        if (touchingLava) {
+            imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+            return;
+        }
+    }
+
+    // LAVA touching WATER -> stone
+    if (elem == LAVA) {
+        ivec2 below = pos + ivec2(0, -1);
+        ivec2 above = pos + ivec2(0,  1);
+        ivec2 left  = pos + ivec2(-1, 0);
+        ivec2 right = pos + ivec2( 1, 0);
+
+        bool touchingWater = (getElement(above) == WATER ||
+                              getElement(below) == WATER ||
+                              getElement(left)  == WATER ||
+                              getElement(right) == WATER);
+        if (touchingWater) {
+            imageStore(stateOut, pos, uvec4(STONE, 0u, 0u, 0u));
+            return;
+        }
+    }
+
+    // ---- conservative movement ----
+    // 1) If someone wins moving into us, we become their element (from stateIn)
+    ivec2 winner = pickWinnerForDest(pos);
+    if (winner.x != 2147483647) {
+        uvec4 winState = getState(winner);
+        imageStore(stateOut, pos, winState);
         return;
     }
 
-    uvec4 current = getState(pos);
-    uint element = current.r;
-
-    // Default: keep current state
-    uvec4 op = current;
-
-    if (element == SAND) {
-        // Sand falls down, or diagonally if blocked
-        ivec2 below = pos + ivec2(0, -1);
-        ivec2 belowLeft = pos + ivec2(-1, -1);
-        ivec2 belowRight = pos + ivec2(1, -1);
-
-        if (isEmpty(below)) {
-            // Fall straight down - become empty, let cell below pull us
-            op = uvec4(EMPTY, 0u, 0u, 0u);
-        } else if (isEmpty(belowLeft) && isEmpty(belowRight)) {
-            // Both diagonals open - pick one (alternating based on position for variety)
-            op = uvec4(EMPTY, 0u, 0u, 0u);
-        } else if (isEmpty(belowLeft)) {
-            op = uvec4(EMPTY, 0u, 0u, 0u);
-        } else if (isEmpty(belowRight)) {
-            op = uvec4(EMPTY, 0u, 0u, 0u);
-        }
-        // else: stay in place
-    }
-    else if (element == EMPTY) {
-        // Check if something should fall into this cell
-        ivec2 above = pos + ivec2(0, 1);
-        ivec2 aboveLeft = pos + ivec2(-1, 1);
-        ivec2 aboveRight = pos + ivec2(1, 1);
-
-        uvec4 aboveState = getState(above);
-        uvec4 aboveLeftState = getState(aboveLeft);
-        uvec4 aboveRightState = getState(aboveRight);
-
-        if (aboveState.r == SAND) {
-            // Sand falls straight down into us
-            op = aboveState;
-        } else if (aboveLeftState.r == SAND && !isEmpty(above + ivec2(-1, -1))) {
-            // Sand from above-left falls diagonally (only if its straight-down is blocked)
-            ivec2 aboveLeftBelow = aboveLeft + ivec2(0, -1);
-            if (!isEmpty(aboveLeftBelow)) {
-                op = aboveLeftState;
-            }
-        } else if (aboveRightState.r == SAND && !isEmpty(above + ivec2(1, -1))) {
-            ivec2 aboveRightBelow = aboveRight + ivec2(0, -1);
-            if (!isEmpty(aboveRightBelow)) {
-                op = aboveRightState;
+    // 2) Otherwise, we either stay, or we move out if we won at our desired destination
+    if (elem != EMPTY && elem != STONE && elem != 255u) {
+        ivec2 dest = desiredDest(pos, elem);
+        if (dest != pos && canDisplace(elem, getElement(dest))) {
+            ivec2 w = pickWinnerForDest(dest);
+            if (w == pos) {
+                // We moved. Our old spot becomes whatever was in dest (swap) or empty.
+                uvec4 displaced = getState(dest);
+                imageStore(stateOut, pos, displaced);
+                return;
             }
         }
     }
 
-    imageStore(stateOut, pos, op);
+    // 3) Default: unchanged
+    imageStore(stateOut, pos, cur);
 }

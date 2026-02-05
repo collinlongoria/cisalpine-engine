@@ -73,6 +73,8 @@ void App::init(int worldW, int worldH) {
     if (!world->init()) {
         throw std::runtime_error("Failed to initialize world");
     }
+
+    lastFrameTime = static_cast<float>(glfwGetTime());
 }
 
 void App::calculateWindowSize(int& windowWidth, int& windowHeight) {
@@ -116,10 +118,20 @@ bool App::screenToWorld(double screenX, double screenY, int& worldX, int& worldY
     return (worldX >= 0 && worldX < worldWidth && worldY >= 0 && worldY < worldHeight);
 }
 
+const char* App::getElementName(Element elem) const {
+    switch (elem) {
+        case Element::Empty: return "Eraser";
+        case Element::Sand:  return "Sand";
+        case Element::Stone: return "Stone";
+        case Element::Water: return "Water";
+        case Element::Lava:  return "Lava";
+        default:             return "Unknown";
+    }
+}
+
 void App::handleInput() {
     ImGuiIO& io = ImGui::GetIO();
 
-    // Don't process input if ImGui wants it
     if (io.WantCaptureMouse) {
         isDrawing = false;
         return;
@@ -129,31 +141,39 @@ void App::handleInput() {
     glfwGetCursorPos(window, &mouseX, &mouseY);
 
     bool leftPressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
+    bool rightPressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 
-    if (leftPressed) {
+    if (leftPressed || rightPressed) {
         int worldX, worldY;
         if (screenToWorld(mouseX, mouseY, worldX, worldY)) {
-            // Spawn particles in a small brush
-            int brushSize = 3;
+            Element drawElement = leftPressed ? selectedElement : Element::Empty;
+
             for (int dy = -brushSize; dy <= brushSize; dy++) {
                 for (int dx = -brushSize; dx <= brushSize; dx++) {
                     if (dx*dx + dy*dy <= brushSize*brushSize) {
-                        world->spawnParticle(worldX + dx, worldY + dy, Element::Sand);
+                        world->spawnParticle(worldX + dx, worldY + dy, drawElement);
                     }
                 }
             }
         }
         isDrawing = true;
-    } else {
+    }
+    else {
         isDrawing = false;
     }
+
+    // Number keys for element selection
+    if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS) selectedElement = Element::Sand;
+    if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) selectedElement = Element::Stone;
+    if (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS) selectedElement = Element::Water;
+    if (glfwGetKey(window, GLFW_KEY_4) == GLFW_PRESS) selectedElement = Element::Lava;
+    if (glfwGetKey(window, GLFW_KEY_0) == GLFW_PRESS) selectedElement = Element::Empty;
 }
 
 void App::renderUI() {
     int windowWidth, windowHeight;
     glfwGetWindowSize(window, &windowWidth, &windowHeight);
 
-    // Side panel
     ImGui::SetNextWindowPos(ImVec2(static_cast<float>(windowWidth - layout.sidePanelWidth), 0));
     ImGui::SetNextWindowSize(ImVec2(static_cast<float>(layout.sidePanelWidth),
                                      static_cast<float>(windowHeight)));
@@ -171,14 +191,78 @@ void App::renderUI() {
     ImGui::Text("World: %dx%d", worldWidth, worldHeight);
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
 
+    // === ELEMENTS ===
+    ImGui::Separator();
+    ImGui::Text("Elements");
+
+    const Element elements[] = {Element::Sand, Element::Stone, Element::Water, Element::Lava, Element::Empty};
+    const char* keys[] = {"1", "2", "3", "4", "0"};
+
+    for (int i = 0; i < 5; i++) {
+        bool selected = (selectedElement == elements[i]);
+        if (selected) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.6f, 0.3f, 1.0f));
+        }
+
+        char label[32];
+        snprintf(label, sizeof(label), "[%s] %s", keys[i], getElementName(elements[i]));
+
+        if (ImGui::Button(label, ImVec2(-1, 0))) {
+            selectedElement = elements[i];
+        }
+
+        if (selected) {
+            ImGui::PopStyleColor();
+        }
+    }
+
+    ImGui::Separator();
+    ImGui::Text("Brush Size");
+    ImGui::SliderInt("##brush", &brushSize, 1, 15);
+
+    // === SIMULATION SETTINGS ===
+    ImGui::Separator();
+    ImGui::Text("Simulation");
+
+    SimulationSettings& simSettings = world->simulationSettings();
+
+    ImGui::SliderFloat("Water Viscosity", &simSettings.waterViscosity, 0.0f, 0.9f, "%.2f");
+    ImGui::SliderFloat("Lava Viscosity", &simSettings.lavaViscosity, 0.0f, 0.95f, "%.2f");
+
+    // === RENDER SETTINGS ===
+    ImGui::Separator();
+    ImGui::Text("Rendering");
+
+    RenderSettings& settings = world->renderSettings();
+
+    ImGui::ColorEdit3("Background", &settings.backgroundColor.r);
+
+    ImGui::Checkbox("Lava Glow", &settings.glowEnabled);
+
+    if (settings.glowEnabled) {
+        ImGui::SliderFloat("Intensity", &settings.glowIntensity, 0.1f, 2.0f);
+        ImGui::SliderFloat("Radius", &settings.glowRadius, 2.0f, 20.0f);
+    }
+
+    // === ACTIONS ===
+    ImGui::Separator();
+    if (ImGui::Button("Clear World", ImVec2(-1, 0))) {
+        world->clear();
+    }
+
+    // === CONTROLS ===
     ImGui::Separator();
     ImGui::Text("Controls");
-    ImGui::BulletText("Left click: Spawn sand");
+    ImGui::BulletText("LMB: Draw");
+    ImGui::BulletText("RMB: Erase");
+    ImGui::BulletText("1-4: Select element");
+    ImGui::BulletText("0: Eraser");
 
     ImGui::Separator();
-
     if (isDrawing) {
-        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "Drawing...");
+        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "Drawing: %s", getElementName(selectedElement));
+    } else {
+        ImGui::Text("Selected: %s", getElementName(selectedElement));
     }
 
     ImGui::End();
@@ -188,10 +272,17 @@ void App::run() {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
 
+        // Calculate delta time
+        float currentTime = static_cast<float>(glfwGetTime());
+        float dt = currentTime - lastFrameTime;
+        lastFrameTime = currentTime;
+
+        if (dt > 0.1f) dt = 0.1f;
+
         handleInput();
 
         // Update simulation
-        world->update();
+        world->update(dt);
 
         // Start ImGui frame
         ImGui_ImplOpenGL3_NewFrame();

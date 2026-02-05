@@ -5,18 +5,35 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8, binding = 1) uniform writeonly image2D displayOut;
 
+uniform vec4 backgroundColor;
+uniform float time;
+
 // Element types
 const uint EMPTY = 0u;
-const uint SAND = 1u;
+const uint SAND  = 1u;
+const uint STONE = 2u;
+const uint WATER = 3u;
+const uint LAVA  = 4u;
 
-vec4 getColor(uint element) {
+vec4 getColor(uint element, ivec2 pos) {
+    // Add slight variation based on position
+    float variation = fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
+
     switch (element) {
         case EMPTY:
-            return vec4(0.05, 0.05, 0.08, 1.0);  // Dark background
+            return backgroundColor;
         case SAND:
-            return vec4(0.86, 0.78, 0.45, 1.0);  // Sandy yellow
+            return vec4(0.82 + variation * 0.08, 0.74 + variation * 0.08, 0.42 + variation * 0.06, 1.0);
+        case STONE:
+            return vec4(0.4 + variation * 0.1, 0.4 + variation * 0.1, 0.45 + variation * 0.1, 1.0);
+        case WATER:
+            return vec4(0.2, 0.4 + variation * 0.1, 0.8 + variation * 0.1, 0.85);
+        case LAVA:
+            // Animated lava color
+            float pulse = sin(time * 3.0 + variation * 6.28) * 0.5 + 0.5;
+            return vec4(1.0, 0.3 + pulse * 0.3, 0.0 + pulse * 0.1, 1.0);
         default:
-            return vec4(1.0, 0.0, 1.0, 1.0);     // Magenta for unknown
+            return vec4(1.0, 0.0, 1.0, 1.0);  // Magenta for unknown
     }
 }
 
@@ -29,10 +46,7 @@ void main() {
     }
 
     uvec4 state = imageLoad(stateIn, pos);
-    vec4 color = getColor(state.r);
-
-    // Could add variation based on state.g, state.b, etc.
-    // For now, just use element color
+    vec4 color = getColor(state.r, pos);
 
     imageStore(displayOut, pos, color);
 }

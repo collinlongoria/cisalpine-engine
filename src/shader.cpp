@@ -158,8 +158,16 @@ void Shader::dispatch(GLuint x, GLuint y, GLuint z) const {
     glDispatchCompute(x, y, z);
 }
 
+void Shader::setBool(std::string_view name, bool value) const {
+    glUniform1i(glGetUniformLocation(programId, name.data()), static_cast<int>(value));
+}
+
 void Shader::setInt(std::string_view name, int value) const {
     glUniform1i(glGetUniformLocation(programId, name.data()), value);
+}
+
+void Shader::setUint(std::string_view name, uint32_t value) const {
+    glUniform1ui(glGetUniformLocation(programId, name.data()), value);
 }
 
 void Shader::setFloat(std::string_view name, float value) const {

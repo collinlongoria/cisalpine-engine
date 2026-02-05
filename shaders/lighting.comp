@@ -1,0 +1,70 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
+layout(rgba8, binding = 1) uniform readonly image2D colorIn;
+layout(rgba8, binding = 2) uniform writeonly image2D displayOut;
+
+uniform bool glowEnabled;
+uniform float glowIntensity;
+uniform float glowRadius;
+uniform float time;
+
+const uint LAVA = 4u;
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(stateIn);
+
+    if (pos.x >= size.x || pos.y >= size.y) {
+        return;
+    }
+
+    vec4 baseColor = imageLoad(colorIn, pos);
+    
+    if (!glowEnabled) {
+        imageStore(displayOut, pos, baseColor);
+        return;
+    }
+
+    // Accumulate glow from nearby lava
+    vec3 glow = vec3(0.0);
+    int radius = int(glowRadius);
+    
+    for (int dy = -radius; dy <= radius; dy++) {
+        for (int dx = -radius; dx <= radius; dx++) {
+            ivec2 samplePos = pos + ivec2(dx, dy);
+            
+            if (samplePos.x < 0 || samplePos.x >= size.x ||
+                samplePos.y < 0 || samplePos.y >= size.y) {
+                continue;
+            }
+            
+            uvec4 state = imageLoad(stateIn, samplePos);
+            
+            if (state.r == LAVA) {
+                float dist = length(vec2(dx, dy));
+                if (dist <= glowRadius) {
+                    // Falloff based on distance
+                    float falloff = 1.0 - (dist / glowRadius);
+                    falloff = falloff * falloff;  // Quadratic falloff
+                    
+                    // Animated glow
+                    float variation = fract(sin(dot(vec2(samplePos), vec2(12.9898, 78.233))) * 43758.5453);
+                    float pulse = sin(time * 2.0 + variation * 6.28) * 0.2 + 0.8;
+                    
+                    // Orange-red glow color
+                    vec3 lavaGlow = vec3(1.0, 0.4, 0.1) * falloff * pulse * glowIntensity;
+                    glow += lavaGlow;
+                }
+            }
+        }
+    }
+    
+    // Add glow to base color (additive blending)
+    vec3 finalColor = baseColor.rgb + glow;
+    finalColor = min(finalColor, vec3(1.0));  // Clamp to prevent overflow
+    
+    imageStore(displayOut, pos, vec4(finalColor, baseColor.a));
+}
