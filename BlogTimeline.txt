@@ -1,0 +1,6 @@
+"I'm Bored. Let's Make a Particle Sandbox"
+
+Day 1 - Basic Sim
+- Set up the stub project that ran a window with imgui
+- Added the simulation and render compute shaders, and the ability to paint falling sand. painting was calculated on the cpu
+- Added stone, an immovable element that tested the logic of the falling sand interacting with other elements

@@ -1,7 +1,7 @@
 /*
 * File: main
-* Project: cisalpine-engine
-* Author: colli
+* Project: Cisalpine Engine
+* Author: Collin Longoria
 * Created on: 2/4/2026
 *
 * Copyright (c) 2025 Collin Longoria

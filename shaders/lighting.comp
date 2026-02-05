@@ -6,13 +6,26 @@ layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8, binding = 1) uniform readonly image2D colorIn;
 layout(rgba8, binding = 2) uniform writeonly image2D displayOut;
 
+struct ElementData {
+    vec4 color;
+    int type; // 0:Static, 1:Granular, 2:Liquid, 3:Gas
+    float density;
+    float viscosity;
+    float probability;
+    int flammability;
+    int glow;
+    int maxLife;
+    int _pad;
+};
+
+layout(std430, binding = 2) buffer ElementRegistry {
+    ElementData elements[];
+};
+
 uniform bool glowEnabled;
 uniform float glowIntensity;
 uniform float glowRadius;
 uniform float time;
-
-const uint LAVA = 4u;
-const uint FIRE = 6u;
 
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
@@ -23,28 +36,33 @@ void main() {
     }
 
     vec4 baseColor = imageLoad(colorIn, pos);
-    
+
     if (!glowEnabled) {
         imageStore(displayOut, pos, baseColor);
         return;
     }
 
-    // Accumulate glow from nearby lava
+    // Accumulate glow from nearby glowing elements
     vec3 glow = vec3(0.0);
     int radius = int(glowRadius);
-    
+
     for (int dy = -radius; dy <= radius; dy++) {
         for (int dx = -radius; dx <= radius; dx++) {
             ivec2 samplePos = pos + ivec2(dx, dy);
-            
+
             if (samplePos.x < 0 || samplePos.x >= size.x ||
                 samplePos.y < 0 || samplePos.y >= size.y) {
                 continue;
             }
-            
+
             uvec4 state = imageLoad(stateIn, samplePos);
-            
-            if (state.r == LAVA || state.r == FIRE) {
+            uint elem = state.r;
+
+            // Check if this element glows
+            // Also include Fire which has maxLife > 0 as a special case
+            bool isGlowing = (elem < MAX_ELEMENTS) && (elements[elem].glow == 1 || elem == FIRE);
+
+            if (isGlowing) {
                 float dist = length(vec2(dx, dy));
                 if (dist <= glowRadius) {
                     float falloff = 1.0 - (dist / glowRadius);
@@ -53,9 +71,14 @@ void main() {
                     float variation = fract(sin(dot(vec2(samplePos), vec2(12.9898, 78.233))) * 43758.5453);
                     float pulse = sin(time * 5.0 + variation * 6.28) * 0.2 + 0.8;
 
-                    vec3 lightColor;
-                    if (state.r == LAVA) lightColor = vec3(1.0, 0.4, 0.1);
-                    else lightColor = vec3(1.0, 0.6, 0.2); // Fire is brighter/yellower
+                    // Use the element's color for glow, boosted
+                    vec3 lightColor = elements[elem].color.rgb;
+                    if (elem == FIRE) {
+                        lightColor = vec3(1.0, 0.6, 0.2);
+                    }
+                    else if (elem == LAVA) {
+                        lightColor = vec3(1.0, 0.4, 0.1);
+                    }
 
                     vec3 glowColor = lightColor * falloff * pulse * glowIntensity;
                     glow += glowColor;
@@ -63,10 +86,10 @@ void main() {
             }
         }
     }
-    
-    // Add glow to base color (additive blending)
+
+    // Add glow to base color
     vec3 finalColor = baseColor.rgb + glow;
     finalColor = min(finalColor, vec3(1.0));  // Clamp to prevent overflow
-    
+
     imageStore(displayOut, pos, vec4(finalColor, baseColor.a));
 }

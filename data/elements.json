@@ -1,0 +1,105 @@
+{
+  "Empty":
+  {
+    "id": 0,
+    "type": "Static",
+    "color": [0.05, 0.05, 0.08, 1.0],
+    "density": 0
+  },
+  "Sand":
+  {
+    "id": 1,
+    "type": "Granular",
+    "color": [0.82, 0.74, 0.42, 1.0],
+    "density": 10
+  },
+  "Stone":
+  {
+    "id": 2,
+    "type": "Static",
+    "color": [0.4, 0.4, 0.45, 1.0],
+    "density": 100
+  },
+  "Water":
+  {
+    "id": 3,
+    "type": "Liquid",
+    "color": [0.2, 0.4, 0.8, 0.85],
+    "density": 5,
+    "viscosity": 0.05,
+    "dispersion": 5
+  },
+  "Lava":
+  {
+    "id": 4,
+    "type": "Liquid",
+    "color": [1.0, 0.3, 0.0, 1.0],
+    "density": 20,
+    "viscosity": 0.8,
+    "glow": true
+  },
+  "Wood":
+  {
+    "id": 5,
+    "type": "Static",
+    "color": [0.4, 0.25, 0.1, 1.0],
+    "density": 50,
+    "flammable": true,
+    "burnChance": 0.05
+  },
+  "Fire":
+  {
+    "id": 6,
+    "type": "Gas",
+    "color": [1.0, 0.5, 0.1, 0.9],
+    "density": -1,
+    "life": 255
+  },
+  "Smoke":
+  {
+    "id": 7,
+    "type": "Gas",
+    "color": [0.5, 0.5, 0.5, 0.4],
+    "density": -2,
+    "life": 200
+  },
+  "Dirt":
+  {
+    "id": 8,
+    "type": "Granular",
+    "color": [0.35, 0.25, 0.15, 1.0],
+    "density": 12
+  },
+  "Seed":
+  {
+    "id": 9,
+    "type": "Granular",
+    "color": [0.6, 0.8, 0.2, 1.0],
+    "density": 8,
+    "flammable": true
+  },
+  "Grass": {
+    "id": 10,
+    "type": "Static",
+    "color": [
+      0.1,
+      0.6,
+      0.1,
+      1
+    ],
+    "density": 50,
+    "flammable": true,
+    "burnChance": 0.3
+  },
+  "Obsidian": {
+    "id": 11,
+    "type": "Static",
+    "color": [
+      0.15,
+      0.1,
+      0.2,
+      1
+    ],
+    "density": 200
+  }
+}

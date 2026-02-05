@@ -5,27 +5,34 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8ui, binding = 1) uniform writeonly uimage2D stateOut;
 
+struct ElementData {
+    vec4 color;
+    int type; // 0:Static, 1:Granular, 2:Liquid, 3:Gas
+    float density;
+    float viscosity;
+    float probability; // burn chance
+    int flammability;
+    int glow;
+    int maxLife;
+    int _pad;
+};
+
+layout(std430, binding = 2) buffer ElementRegistry {
+    ElementData elements[];
+};
+
 uniform vec2  worldSize;
-uniform float time; // randomization seed
-uniform uint  frameCount; // deterministic tie-break
+uniform float time;
+uniform uint  frameCount;
 
-uniform float waterViscosity;
-uniform float lavaViscosity;
-
-// Element types
-const uint EMPTY = 0u;
-const uint SAND  = 1u;
-const uint STONE = 2u;
-const uint WATER = 3u;
-const uint LAVA  = 4u;
-const uint WOOD  = 5u;
-const uint FIRE  = 6u;
-const uint SMOKE = 7u;
-const uint DIRT  = 8u;
-const uint SEED  = 9u;
-const uint GRASS = 10u;
+// Type constants
+const int TYPE_STATIC   = 0;
+const int TYPE_GRANULAR = 1;
+const int TYPE_LIQUID   = 2;
+const int TYPE_GAS      = 3;
 
 // Helpers
+
 bool inBounds(ivec2 p) {
     return (p.x >= 0 && p.x < int(worldSize.x) &&
             p.y >= 0 && p.y < int(worldSize.y));
@@ -43,6 +50,7 @@ uint hashU32(uint x) {
     x ^= x >> 16;
     return x;
 }
+
 uint hash2u(uvec2 v) {
     return hashU32(v.x ^ (v.y + 0x9e3779b9u + (v.x<<6) + (v.x>>2)));
 }
@@ -57,45 +65,84 @@ uvec4 getState(ivec2 pos) {
 uint getElement(ivec2 pos) { return getState(pos).r; }
 uint getLife(ivec2 pos) { return getState(pos).g; }
 
-// Categories
-bool isLiquid(uint e) { return e == WATER || e == LAVA; }
-bool isGas(uint e)    { return e == FIRE || e == SMOKE; }
-bool isGranular(uint e) { return e == SAND || e == DIRT || e == SEED; }
-bool isImmobile(uint e) { return e == STONE || e == WOOD || e == GRASS || e == 255u; }
-bool isFlammable(uint e) { return e == WOOD || e == GRASS || e == SEED; }
+// Type checks
 
-float viscosityOf(uint e) {
-    if (e == WATER) return clamp(waterViscosity, 0.0, 1.0);
-    if (e == LAVA)  return clamp(lavaViscosity,  0.0, 1.0);
-    return 1.0; // not used
+bool isStatic(uint id) {
+    return id < MAX_ELEMENTS && elements[id].type == TYPE_STATIC;
 }
 
-bool canDisplace(uint mover, uint target) {
-    if (target == EMPTY) return true;
-    if (isGas(target)) return true; // Everything displaces gas
-    if (mover == LAVA && (target == WATER || isFlammable(target))) return true; // Lava burns things
-    if ((isGranular(mover) || mover == LAVA) && target == WATER) return true; // Sink in water
-    if (mover == FIRE && target == SMOKE) return true;
-    return false;
+bool isGranular(uint id) {
+    return id < MAX_ELEMENTS && elements[id].type == TYPE_GRANULAR;
+}
+
+bool isLiquid(uint id) {
+    return id < MAX_ELEMENTS && elements[id].type == TYPE_LIQUID;
+}
+
+bool isGas(uint id) {
+    return id < MAX_ELEMENTS && elements[id].type == TYPE_GAS;
+}
+
+bool isEmpty(uint id) {
+    return id == EMPTY;
+}
+
+bool isImmobile(uint id) {
+    if (id >= MAX_ELEMENTS) return true;
+    return elements[id].type == TYPE_STATIC;
+}
+
+bool isFlammable(uint id) {
+    return id < MAX_ELEMENTS && elements[id].flammability == 1;
+}
+
+bool isGlowing(uint id) {
+    return id < MAX_ELEMENTS && elements[id].glow == 1;
+}
+
+bool hasLife(uint id) {
+    return id < MAX_ELEMENTS && elements[id].maxLife > 0;
 }
 
 // Movement Logic
-ivec2 desiredDest(ivec2 src, uint elem) {
-    if (elem == EMPTY || isImmobile(elem)) return src;
 
-    ivec2 down = src + ivec2(0, -1);
+bool canDisplace(uint mover, uint target) {
+    if (target == EMPTY) return true;
+    if (mover == target) return false;
+    if (mover >= MAX_ELEMENTS || target >= MAX_ELEMENTS) return false;
+
+    float dMover = elements[mover].density;
+    float dTarget = elements[target].density;
+
+    // Fire destroys smoke (both are gases, fire is special)
+    if (mover == FIRE && target == SMOKE) return true;
+
+    // Heavier things displace lighter fluids/gases
+    if (dMover > dTarget && (isLiquid(target) || isGas(target))) return true;
+
+    // Lava/Fire burns flammable things
+    if ((mover == LAVA || mover == FIRE) && isFlammable(target)) return true;
+
+    return false;
+}
+
+ivec2 desiredDest(ivec2 src, uint elem) {
+    if (isStatic(elem)) return src;
+
+    int type = elements[elem].type;
+    ivec2 down  = src + ivec2(0, -1);
     ivec2 downL = src + ivec2(-1, -1);
     ivec2 downR = src + ivec2(1, -1);
-    ivec2 left = src + ivec2(-1, 0);
+    ivec2 left  = src + ivec2(-1, 0);
     ivec2 right = src + ivec2(1, 0);
-    ivec2 up = src + ivec2(0, 1);
-    ivec2 upL = src + ivec2(-1, 1);
-    ivec2 upR = src + ivec2(1, 1);
+    ivec2 up    = src + ivec2(0, 1);
+    ivec2 upL   = src + ivec2(-1, 1);
+    ivec2 upR   = src + ivec2(1, 1);
 
     bool leftFirst = (hash2u(uvec2(src) ^ uvec2(frameCount)) & 1u) == 0u;
 
-    // Granular (Sand, Dirt, Seed)
-    if (isGranular(elem)) {
+    // GRANULAR
+    if (type == TYPE_GRANULAR) {
         if (canDisplace(elem, getElement(down))) return down;
         if (leftFirst) {
             if (canDisplace(elem, getElement(downL))) return downL;
@@ -104,15 +151,29 @@ ivec2 desiredDest(ivec2 src, uint elem) {
             if (canDisplace(elem, getElement(downR))) return downR;
             if (canDisplace(elem, getElement(downL))) return downL;
         }
-        return src;
     }
+    // LIQUID
+    else if (type == TYPE_LIQUID) {
+        if (canDisplace(elem, getElement(down))) return down;
 
-    // Gases (Fire, Smoke) - Rise
-    if (isGas(elem)) {
-        // Rise up
+        // Viscosity check - higher viscosity = more likely to stay put
+        if (random01(src) < elements[elem].viscosity) return src;
+
+        if (leftFirst) {
+            if (canDisplace(elem, getElement(downL))) return downL;
+            if (canDisplace(elem, getElement(downR))) return downR;
+            if (canDisplace(elem, getElement(left))) return left;
+            if (canDisplace(elem, getElement(right))) return right;
+        } else {
+            if (canDisplace(elem, getElement(downR))) return downR;
+            if (canDisplace(elem, getElement(downL))) return downL;
+            if (canDisplace(elem, getElement(right))) return right;
+            if (canDisplace(elem, getElement(left))) return left;
+        }
+    }
+    // GAS
+    else if (type == TYPE_GAS) {
         if (getElement(up) == EMPTY) return up;
-
-        // Disperse
         if (leftFirst) {
             if (getElement(upL) == EMPTY) return upL;
             if (getElement(upR) == EMPTY) return upR;
@@ -123,31 +184,6 @@ ivec2 desiredDest(ivec2 src, uint elem) {
             if (getElement(upL) == EMPTY) return upL;
             if (getElement(right) == EMPTY) return right;
             if (getElement(left) == EMPTY) return left;
-        }
-        return src;
-    }
-
-    // Liquids
-    if (isLiquid(elem)) {
-        if (canDisplace(elem, getElement(down))) return down;
-        float visc = (elem == WATER) ? waterViscosity : lavaViscosity;
-
-        // Viscosity check for spreading
-        if (random01(src) < visc) {
-             // Only gravity allowed if viscous check fails
-             return src;
-        }
-
-        if (leftFirst) {
-            if (canDisplace(elem, getElement(downL))) return downL;
-            if (canDisplace(elem, getElement(downR))) return downR;
-            if (canDisplace(elem, getElement(left))) return left;
-            if (canDisplace(elem, getElement(right))) return right;
-        } else {
-            if (canDisplace(elem, getElement(downR))) return downR;
-            if (canDisplace(elem, getElement(downL))) return downL;
-            if (canDisplace(elem, getElement(right))) return right;
-            if (canDisplace(elem, getElement(left))) return left;
         }
     }
 
@@ -193,115 +229,108 @@ void main() {
     uint elem = cur.r;
     uint life = cur.g;
 
-    // --- 1. Elemental Interactions (Reactions) ---
-    bool reactionOccurred = false;
+    // Boundary sentinel check
+    if (elem >= MAX_ELEMENTS) {
+        imageStore(stateOut, pos, cur);
+        return;
+    }
 
-    // Fire Logic
-    if (elem == FIRE) {
-        // Reduce life
-        uint fade = 4u + uint(random01(pos) * 5.0); // Random decay
-        if (life <= fade) {
-            // Die -> become smoke
-            imageStore(stateOut, pos, uvec4(SMOKE, 200u, 0u, 0u));
-            return;
-        }
-        cur.g -= fade;
-        reactionOccurred = true;
+    // REACTION LOGIC
 
-        // Spread fire
-        ivec2 dirs[4] = {ivec2(0,1), ivec2(0,-1), ivec2(1,0), ivec2(-1,0)};
-        for(int i=0; i<4; i++) {
-            ivec2 nPos = pos + dirs[i];
-            uint neighbor = getElement(nPos);
-            if(isFlammable(neighbor) && random01(pos) < 0.1) {
-                // Ignite neighbor (write to stateOut directly? No, this is tricky in parallel)
-                // We rely on the neighbor reading US in their update next frame?
-                // OR we can't write to neighbor. We must wait for neighbor to check us.
+    // Water + Lava interaction
+    // Water touching lava -> this water becomes smoke
+    // Lava touching water -> this lava becomes obsidian
+    if (elem == WATER) {
+        bool touchingLava = false;
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (getElement(pos + ivec2(dx, dy)) == LAVA) {
+                    touchingLava = true;
+                }
             }
         }
-    }
-
-    // Smoke Logic
-    if (elem == SMOKE) {
-        if (life <= 2u) {
-            imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+        if (touchingLava) {
+            imageStore(stateOut, pos, uvec4(SMOKE, 200u, 0, 0));
             return;
         }
-        cur.g -= 2u;
-        reactionOccurred = true;
+    }
+    if (elem == LAVA) {
+        bool touchingWater = false;
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (getElement(pos + ivec2(dx, dy)) == WATER) {
+                    touchingWater = true;
+                }
+            }
+        }
+        if (touchingWater) {
+            imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0, 0));
+            return;
+        }
     }
 
-    // Wood/Grass/Seed (Flammable) checking for Fire
+    // Generic Life Decay (for Gas or decaying elements)
+    if (hasLife(elem) && life > 0u) {
+        uint decayRate = 4u;
+        if (life <= decayRate) {
+            // Death transformation - Fire becomes Smoke, others become Empty
+            uint deathElem = (elem == FIRE) ? SMOKE : EMPTY;
+            uint deathLife = (deathElem == SMOKE) ? 200u : 0u;
+            imageStore(stateOut, pos, uvec4(deathElem, deathLife, 0, 0));
+            return;
+        }
+        cur.g = life - decayRate;
+    }
+
+    // Flammability Logic (Generic)
     if (isFlammable(elem)) {
         bool touchingFire = false;
-        for(int dy=-1; dy<=1; dy++) {
-            for(int dx=-1; dx<=1; dx++) {
-                if(dx==0 && dy==0) continue;
+        for(int dy = -1; dy <= 1; dy++) {
+            for(int dx = -1; dx <= 1; dx++) {
                 uint n = getElement(pos + ivec2(dx, dy));
-                if(n == FIRE || n == LAVA) touchingFire = true;
+                if (n == FIRE || n == LAVA) touchingFire = true;
             }
         }
-        if (touchingFire) {
-            float chance = (elem == WOOD) ? 0.05 : 0.3; // Wood burns slow, grass fast
-            if (random01(pos) < chance) {
-                // Ignite!
-                imageStore(stateOut, pos, uvec4(FIRE, 255u, 0u, 0u));
-                return;
-            }
-        }
-    }
-
-    // Seed Logic (Grow Grass)
-    if (elem == SEED) {
-        // If touching Dirt, turn dirt to Grass
-        // Note: We can't change the dirt below us in this pass easily.
-        // Instead, if we are ON dirt, we become grass, and rely on spreading logic?
-        // Let's say: Seed falls. If it lands on Dirt, it turns ITSELF into Grass.
-        ivec2 below = pos + ivec2(0, -1);
-        if (getElement(below) == DIRT) {
-            imageStore(stateOut, pos, uvec4(GRASS, 0u, 0u, 0u));
+        if (touchingFire && random01(pos) < elements[elem].probability) {
+            imageStore(stateOut, pos, uvec4(FIRE, 255u, 0, 0));
             return;
         }
     }
 
-    // Grass Spreading
-    if (elem == GRASS) {
-        // Randomly spread to nearby Dirt
-        if (random01(pos) < 0.005) { // Slow spread
-            ivec2 dirs[4] = {ivec2(1,0), ivec2(-1,0), ivec2(0,-1), ivec2(0,1)};
-            int idx = int(random01(pos)*4.0);
+    // SEED -> GRASS Logic
+    // When a seed lands on dirt (dirt is directly below), it becomes grass with max life
+    if (elem == SEED) {
+        ivec2 below = pos + ivec2(0, -1);
+        if (inBounds(below) && getElement(below) == DIRT) {
+            imageStore(stateOut, pos, uvec4(GRASS, 255u, 0, 0));
+            return;
+        }
+    }
+
+    // GRASS Spreading
+    // Grass spreads to adjacent dirt cells. The spread probability is proportional
+    // to life: high life = more likely to spread. Each new grass gets less life,
+    // creating natural diminishing growth outward from the seed point.
+    if (elem == GRASS && life > 30u) {
+        // Spread chance scales with life: life=255 -> 8% chance, life=30 -> ~1%
+        float spreadChance = (float(life) / 255.0) * 0.08;
+        if (random01(pos) < spreadChance) {
+            // Pick a random cardinal direction
+            ivec2 dirs[4] = ivec2[4](ivec2(1,0), ivec2(-1,0), ivec2(0,-1), ivec2(0,1));
+            int idx = int(random01(pos + ivec2(int(frameCount), 0)) * 4.0);
+            idx = clamp(idx, 0, 3);
             ivec2 target = pos + dirs[idx];
-            // Since we can't write to neighbor, this is limited.
-            // Better: DIRT checks for neighbor GRASS and becomes GRASS.
-        }
-    }
 
-    // Dirt Logic (Becomes Grass)
-    if (elem == DIRT) {
-        ivec2 up = pos + ivec2(0, 1);
-        // Only grow grass if top is exposed to air (or transparent)
-        if (getElement(up) == EMPTY || getElement(up) == WATER) {
-            bool touchingGrass = false;
-            for(int dx=-1; dx<=1; dx++) {
-                uint n = getElement(pos + ivec2(dx, 1)); // Look at diagonals up too
-                if (n == GRASS) touchingGrass = true;
-            }
-            if (touchingGrass && random01(pos) < 0.01) {
-                imageStore(stateOut, pos, uvec4(GRASS, 0u, 0u, 0u));
-                return;
+            if (inBounds(target) && getElement(target) == DIRT) {
+                // New grass gets less life than parent -> diminishing spread
+                uint newLife = life - 25u;
+                if (newLife < 30u) newLife = 30u; // Minimum life to still look alive
+                imageStore(stateOut, target, uvec4(GRASS, newLife, 0, 0));
             }
         }
     }
 
-    // Water/Lava/Stone interactions (Keep existing)
-    if (elem == STONE) { /* ... existing ... */ }
-    if (elem == WATER) {
-        // Lava check
-        /* ... existing ... */
-    }
-
-
-    // --- 2. Movement ---
+    //  MOVEMENT
 
     // If someone wins moving into us, we get overwritten
     ivec2 winner = pickWinnerForDest(pos);
@@ -312,7 +341,7 @@ void main() {
     }
 
     // Otherwise, try to move
-    if (elem != EMPTY && !isImmobile(elem)) {
+    if (!isEmpty(elem) && !isImmobile(elem)) {
         ivec2 dest = desiredDest(pos, elem);
         if (dest != pos && canDisplace(elem, getElement(dest))) {
             ivec2 w = pickWinnerForDest(dest);
@@ -325,6 +354,6 @@ void main() {
         }
     }
 
-    // If nothing happened, write back modified state (e.g. reduced fire life)
+    // If nothing happened, write back (possibly modified) state
     imageStore(stateOut, pos, cur);
 }

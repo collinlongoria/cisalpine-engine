@@ -1,7 +1,7 @@
 /*
-* File: app
-* Project: cisalpine
-* Author: colli
+* File: app.hpp
+* Project: Cisalpine Engine
+* Author: Collin Longoria
 * Created on: 2/4/2026
 *
 * Copyright (c) 2025 Collin Longoria
@@ -17,6 +17,8 @@
 #include "GLFW/glfw3.h"
 #include "world.hpp"
 #include <memory>
+
+#include "registry.hpp"
 
 namespace cisalpine {
 
@@ -59,9 +61,14 @@ private:
 
     // Input state
     bool isDrawing = false;
-    Element selectedElement = Element::Sand;
+    bool lastMousePressed = false; // for single click tracking
+    int selectedElementId = 1;
     BrushShape selectedBrush = BrushShape::Circle;
     int brushSize = 3;
+
+    // Logic
+    Registry registry;
+    Shader brushShader;
 
     void calculateWindowSize(int& windowWidth, int& windowHeight);
     void updateLayout(int windowWidth, int windowHeight);
@@ -70,9 +77,6 @@ private:
 
     // Convert screen coords to world coords
     bool screenToWorld(double screenX, double screenY, int& worldX, int& worldY);
-
-    // UI Helpers
-    const char* getElementName(Element elem) const;
 };
 
 }

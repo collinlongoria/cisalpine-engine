@@ -1,0 +1,53 @@
+#version 460 core
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba8ui, binding = 0) uniform uimage2D stateMap;
+
+uniform int brushX;
+uniform int brushY;
+uniform int brushSize;
+uniform int brushShape; // 0:Circle, 1:Square, 2:Star
+uniform uint drawElement;
+uniform bool isEraser;
+
+void main() {
+    ivec2 size = imageSize(stateMap);
+
+    // Offset thread position to be centered around brush
+    int dx = int(gl_GlobalInvocationID.x) - brushSize;
+    int dy = int(gl_GlobalInvocationID.y) - brushSize;
+    ivec2 pos = ivec2(brushX + dx, brushY + dy);
+
+    // Early exit if outside brush bounds
+    if (abs(dx) > brushSize || abs(dy) > brushSize) return;
+    if (pos.x < 0 || pos.x >= size.x || pos.y < 0 || pos.y >= size.y) return;
+
+    bool paint = false;
+
+    if (brushShape == 1) { // Square
+        paint = true;
+    }
+    else if (brushShape == 0) { // Circle
+        if (dx*dx + dy*dy <= brushSize*brushSize) paint = true;
+    }
+    else if (brushShape == 2) { // Diamond
+        if (abs(dx) + abs(dy) <= brushSize) paint = true;
+    }
+
+    if (paint) {
+        uvec4 current = imageLoad(stateMap, pos);
+
+        if (isEraser) {
+            // Erase: overwrite anything that isn't already empty
+            if (current.r != EMPTY) {
+                imageStore(stateMap, pos, uvec4(EMPTY, 0u, 0u, 0u));
+            }
+        }
+        else {
+            // Draw: only place if cell is empty
+            if (current.r == EMPTY) {
+                imageStore(stateMap, pos, uvec4(drawElement, 255u, 0u, 0u));
+            }
+        }
+    }
+}

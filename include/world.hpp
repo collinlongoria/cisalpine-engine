@@ -1,7 +1,7 @@
 /*
-* File: world
-* Project: cisalpine
-* Author: colli
+* File: world.hpp
+* Project: Cisalpine Engine
+* Author: Collin Longoria
 * Created on: 2/4/2026
 *
 * Copyright (c) 2025 Collin Longoria
@@ -20,30 +20,8 @@
 
 namespace cisalpine {
 
-// Element types
-// Stored in R channel of state texture
-// TODO currently must match shader constraints
-enum class Element : uint8_t {
-    Empty = 0,
-    Sand = 1,
-    Stone = 2,
-    Water = 3,
-    Lava = 4,
-    Wood = 5,
-    Fire = 6,
-    Smoke = 7,
-    Dirt = 8,
-    Seed = 9,
-    Grass = 10,
-    COUNT
-};
-
 // Simulation settings
 struct SimulationSettings {
-    // Viscosity: 0 = instant flow, 1 = no flow
-    float waterViscosity = 0.05f;
-    float lavaViscosity = 0.75f;
-
     // Simulation loops per frame
     int stepsPerFrame = 4;
 };
@@ -64,16 +42,17 @@ public:
     World(const World&) = delete;
     World& operator=(const World&) = delete;
 
-    bool init();
+    bool init(const std::string& shaderHeader);
     void update(float dt);
     void render(int screenX, int screenY, int screenWidth, int screenHeight);
 
-    void spawnParticle(int x, int y, Element element);
     void clear();
 
     int width() const { return worldWidth; }
     int height() const { return worldHeight; }
 
+    // Get current state texture for brush shader
+    GLuint getCurrentTexture() const { return stateTextures[currentBuffer]; }
     GLuint getDisplayTexture() const { return displayTexture; }
 
     RenderSettings& renderSettings() { return renderSettingsData; }
@@ -93,7 +72,7 @@ private:
     static constexpr float FIXED_TIMESTEP = 1.0f / 60.0f; // 60 sim steps / second
 
     // Double-buffered state textures (RGBA8UI)
-    // R = element, G = state, B = velocity
+    // R = element, G = life/state, B = velocity/misc, A = flags
     GLuint stateTextures[2] = {0, 0};
     int currentBuffer = 0;
 

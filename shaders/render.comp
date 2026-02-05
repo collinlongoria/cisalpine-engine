@@ -5,56 +5,84 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8, binding = 1) uniform writeonly image2D displayOut;
 
+// The JSON data structure - must match C++ GPUElementData exactly
+struct ElementData {
+    vec4 color;
+    int type; // 0:Static, 1:Granular, 2:Liquid, 3:Gas
+    float density;
+    float viscosity;
+    float probability;
+    int flammability;
+    int glow;
+    int maxLife;
+    int _pad;
+};
+
+layout(std430, binding = 2) buffer ElementRegistry {
+    ElementData elements[];
+};
+
 uniform vec4 backgroundColor;
 uniform float time;
 
-// Element types
-const uint EMPTY = 0u;
-const uint SAND  = 1u;
-const uint STONE = 2u;
-const uint WATER = 3u;
-const uint LAVA  = 4u;
-const uint WOOD  = 5u;
-const uint FIRE  = 6u;
-const uint SMOKE = 7u;
-const uint DIRT  = 8u;
-const uint SEED  = 9u;
-const uint GRASS = 10u;
-
 vec4 getColor(uint element, uint life, ivec2 pos) {
-    // Add slight variation based on position
+    // Add slight variation based on position for natural look
     float variation = fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
 
-    switch (element) {
-        case EMPTY:
-            return backgroundColor;
-        case SAND:
-            return vec4(0.82 + variation * 0.08, 0.74 + variation * 0.08, 0.42 + variation * 0.06, 1.0);
-        case STONE:
-            return vec4(0.4 + variation * 0.1, 0.4 + variation * 0.1, 0.45 + variation * 0.1, 1.0);
-        case WATER:
-            return vec4(0.2, 0.4 + variation * 0.1, 0.8 + variation * 0.1, 0.85);
-        case LAVA:
-            float pulse = sin(time * 3.0 + variation * 6.28) * 0.5 + 0.5;
-            return vec4(1.0, 0.3 + pulse * 0.3, 0.0 + pulse * 0.1, 1.0);
-        case WOOD:
-            return vec4(0.4 + variation*0.05, 0.25 + variation*0.05, 0.1, 1.0);
-        case FIRE:
-            float flicker = sin(time * 10.0 + variation * 10.0) * 0.5 + 0.5;
-            float lifeFactor = float(life) / 255.0;
-            return vec4(1.0, 0.5 * lifeFactor + flicker * 0.3, 0.1, 0.9 * lifeFactor); // Orange -> Red
-        case SMOKE:
-            float density = float(life) / 255.0;
-            return vec4(0.5, 0.5, 0.5, 0.4 * density);
-        case DIRT:
-            return vec4(0.35 + variation*0.05, 0.25 + variation*0.05, 0.15, 1.0);
-        case SEED:
-            return vec4(0.6, 0.8, 0.2, 1.0);
-        case GRASS:
-            return vec4(0.1, 0.6 + variation*0.1, 0.1, 1.0);
-        default:
-            return vec4(1.0, 0.0, 1.0, 1.0);
+    // Empty uses background color
+    if (element == EMPTY) {
+        return backgroundColor;
     }
+
+    // Bounds check
+    if (element >= MAX_ELEMENTS) {
+        return vec4(1.0, 0.0, 1.0, 1.0); // Magenta for undefined
+    }
+
+    vec4 baseColor = elements[element].color;
+
+    // Add variation to base color
+    vec3 varied = baseColor.rgb + (variation - 0.5) * 0.1;
+
+    // Special rendering for specific element types
+    int type = elements[element].type;
+
+    // Glowing elements (Lava, etc.) - pulsing effect
+    if (elements[element].glow == 1) {
+        float pulse = sin(time * 3.0 + variation * 6.28) * 0.5 + 0.5;
+        varied.g += pulse * 0.3;
+        varied.b += pulse * 0.1;
+    }
+
+    // Fire - special flickering based on life
+    if (element == FIRE) {
+        float flicker = sin(time * 10.0 + variation * 10.0) * 0.5 + 0.5;
+        float lifeFactor = float(life) / 255.0;
+        varied = vec3(1.0, 0.5 * lifeFactor + flicker * 0.3, 0.1);
+        return vec4(varied, 0.9 * lifeFactor);
+    }
+
+    // Smoke - fade based on life
+    if (element == SMOKE) {
+        float density = float(life) / 255.0;
+        return vec4(baseColor.rgb, baseColor.a * density);
+    }
+
+    // Grass - slight color variation based on life (older grass is darker/richer)
+    if (element == GRASS) {
+        float lifeFactor = float(life) / 255.0;
+        // Younger grass (lower life from spreading) is lighter/yellower
+        varied.r += (1.0 - lifeFactor) * 0.15;
+        varied.g -= (1.0 - lifeFactor) * 0.1;
+    }
+
+    // Liquids - slight shimmer
+    if (type == 2) { // Liquid
+        float shimmer = sin(time * 2.0 + float(pos.x) * 0.5 + float(pos.y) * 0.3) * 0.05;
+        varied += shimmer;
+    }
+
+    return vec4(clamp(varied, 0.0, 1.0), baseColor.a);
 }
 
 void main() {

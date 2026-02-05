@@ -1,7 +1,7 @@
 /*
-* File: shader
-* Project: cisalpine
-* Author: colli
+* File: shader.hpp
+* Project: Cisalpine Engine
+* Author: Collin Longoria
 * Created on: 2/4/2026
 *
 * Copyright (c) 2025 Collin Longoria
@@ -30,7 +30,7 @@ public:
     Shader& operator=(Shader&& other) noexcept;
 
     bool loadFromFile(std::string_view vertexPath, std::string_view fragmentPath);
-    bool loadCompute(std::string_view computePath);
+    bool loadCompute(std::string_view computePath, const std::string& header = "");
 
     void use() const;
     void dispatch(GLuint x, GLuint y, GLuint z) const;

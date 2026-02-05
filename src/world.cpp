@@ -1,7 +1,7 @@
 /*
-* File: world
-* Project: cisalpine
-* Author: colli
+* File: world.cpp
+* Project: Cisalpine Engine
+* Author: Collin Longoria
 * Created on: 2/4/2026
 *
 * Copyright (c) 2025 Collin Longoria
@@ -28,17 +28,17 @@ World::~World() {
     if (quadVBO) glDeleteBuffers(1, &quadVBO);
 }
 
-bool World::init() {
+bool World::init(const std::string& shaderHeader) {
     // Load shaders
-    if (!simulationShader.loadCompute("shaders/simulation.comp")) {
+    if (!simulationShader.loadCompute("shaders/simulation.comp", shaderHeader)) {
         std::cerr << "Failed to load simulation shader" << std::endl;
         return false;
     }
-    if (!renderShader.loadCompute("shaders/render.comp")) {
+    if (!renderShader.loadCompute("shaders/render.comp", shaderHeader)) {
         std::cerr << "Failed to load render shader" << std::endl;
         return false;
     }
-    if (!lightingShader.loadCompute("shaders/lighting.comp")) {
+    if (!lightingShader.loadCompute("shaders/lighting.comp", shaderHeader)) {
         std::cerr << "Failed to load lighting shader" << std::endl;
         return false;
     }
@@ -118,28 +118,6 @@ void World::createQuad() {
     glBindVertexArray(0);
 }
 
-void World::spawnParticle(int x, int y, Element element) {
-    if (x < 0 || x >= worldWidth || y < 0 || y >= worldHeight) return;
-
-    // R = Element
-    // G = Life / Variant
-    // B = Velocity / Misc
-    uint8_t life = 0;
-    if (element == Element::Fire || element == Element::Smoke) life = 255;
-    if (element == Element::Grass) life = rand() % 255;
-
-    uint8_t pixel[4] = {
-        static_cast<uint8_t>(element),
-        life,
-        128,
-        0
-    };
-
-    glBindTexture(GL_TEXTURE_2D, stateTextures[currentBuffer]);
-    glTexSubImage2D(GL_TEXTURE_2D, 0, x, y, 1, 1, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, pixel);
-    glBindTexture(GL_TEXTURE_2D, 0);
-}
-
 void World::clear() {
     std::vector<uint8_t> clearData(worldWidth * worldHeight * 4, 0);
 
@@ -163,8 +141,6 @@ void World::simulationStep() {
     simulationShader.setVec2("worldSize", static_cast<float>(worldWidth), static_cast<float>(worldHeight));
     simulationShader.setFloat("time", simulationTime);
     simulationShader.setUint("frameCount", frameCount);
-    simulationShader.setFloat("waterViscosity", simSettings.waterViscosity);
-    simulationShader.setFloat("lavaViscosity", simSettings.lavaViscosity);
 
     GLuint workGroupsX = (worldWidth + 15) / 16;
     GLuint workGroupsY = (worldHeight + 15) / 16;

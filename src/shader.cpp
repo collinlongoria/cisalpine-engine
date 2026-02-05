@@ -1,7 +1,7 @@
 /*
-* File: shader
-* Project: cisalpine
-* Author: colli
+* File: shader.cpp
+* Project: Cisalpine Engine
+* Author: Collin Longoria
 * Created on: 2/4/2026
 *
 * Copyright (c) 2025 Collin Longoria
@@ -125,10 +125,20 @@ bool Shader::loadFromFile(std::string_view vertexPath, std::string_view fragment
     return true;
 }
 
-bool Shader::loadCompute(std::string_view computePath) {
+bool Shader::loadCompute(std::string_view computePath, const std::string& header) {
     std::string source = readFile(computePath);
     if (source.empty()) {
         return false;
+    }
+
+    // Inject header after version string
+    size_t versionPos = source.find("#version");
+    if (versionPos != std::string::npos) {
+        size_t nextLine = source.find('\n', versionPos);
+        source.insert(nextLine + 1, header + "\n");
+    }
+    else {
+        source = header + "\n" + source;
     }
 
     GLuint computeShader = compileShader(GL_COMPUTE_SHADER, source, computePath);

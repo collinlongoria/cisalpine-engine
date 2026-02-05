@@ -1,7 +1,7 @@
 /*
 * File: app
-* Project: cisalpine
-* Author: colli
+* Project: Cisalpine Engine
+* Author: Collin Longoria
 * Created on: 2/4/2026
 *
 * Copyright (c) 2025 Collin Longoria
@@ -56,6 +56,10 @@ void App::init(int worldW, int worldH) {
     std::cout << "OpenGL Version: " << glGetString(GL_VERSION) << std::endl;
     std::cout << "GLSL Version: " << glGetString(GL_SHADING_LANGUAGE_VERSION) << std::endl;
 
+    // load registry
+    registry.load("data/elements.json");
+
+    // init imgui
     IMGUI_CHECKVERSION();
     ImGui::CreateContext();
     ImGuiIO& io = ImGui::GetIO();
@@ -68,10 +72,21 @@ void App::init(int worldW, int worldH) {
     // Calculate layout
     updateLayout(windowWidth, windowHeight);
 
+    // Get shader header from registry
+    std::string header = registry.getShaderHeader();
+
     // Create world
     world = std::make_unique<World>(worldWidth, worldHeight);
-    if (!world->init()) {
+    if (!world->init(header)) {
         throw std::runtime_error("Failed to initialize world");
+    }
+
+    // Bind registry SSBO (binding point 2 matches shader layout)
+    registry.bindSSBO(2);
+
+    // Load brush shader with same header for element defines
+    if (!brushShader.loadCompute("shaders/brush.comp", header)) {
+        throw std::runtime_error("Failed to load brush shader");
     }
 
     lastFrameTime = static_cast<float>(glfwGetTime());
@@ -102,7 +117,7 @@ bool App::screenToWorld(double screenX, double screenY, int& worldX, int& worldY
         screenY < layout.viewportY ||
         screenY >= layout.viewportY + layout.viewportHeight) {
         return false;
-        }
+    }
 
     // Convert to viewport-local coordinates
     double localX = screenX - layout.viewportX;
@@ -116,23 +131,6 @@ bool App::screenToWorld(double screenX, double screenY, int& worldX, int& worldY
     worldY = static_cast<int>(localY / pixelScale);
 
     return (worldX >= 0 && worldX < worldWidth && worldY >= 0 && worldY < worldHeight);
-}
-
-const char* App::getElementName(Element elem) const {
-    switch (elem) {
-        case Element::Empty: return "Eraser";
-        case Element::Sand:  return "Sand";
-        case Element::Stone: return "Stone";
-        case Element::Water: return "Water";
-        case Element::Lava:  return "Lava";
-        case Element::Wood:  return "Wood";
-        case Element::Fire:  return "Fire";
-        case Element::Smoke: return "Smoke";
-        case Element::Dirt:  return "Dirt";
-        case Element::Seed:  return "Seed";
-        case Element::Grass: return "Grass";
-        default:             return "Unknown";
-    }
 }
 
 void App::handleInput() {
@@ -150,50 +148,55 @@ void App::handleInput() {
     bool leftPressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     bool rightPressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 
-    if (leftPressed || rightPressed) {
+    bool shouldDraw = false;
+
+    // Data-driven single-click check from registry
+    bool isSingleClickItem = registry.isSingleClick(selectedElementId);
+
+    if (leftPressed) {
+        if (isSingleClickItem) {
+            if (!lastMousePressed) shouldDraw = true; // Only on first frame of press
+        } else {
+            shouldDraw = true; // Continuous
+        }
+    }
+    if (rightPressed) shouldDraw = true; // Eraser is always continuous
+
+    lastMousePressed = leftPressed; // Update state
+
+    if (shouldDraw) {
         int worldX, worldY;
         if (screenToWorld(mouseX, mouseY, worldX, worldY)) {
-            Element drawElement = leftPressed ? selectedElement : Element::Empty;
+            // Determine if this is an erase action:
+            // Right-click always erases, OR left-click with Empty selected
+            bool erasing = rightPressed || (selectedElementId == 0);
 
-            for (int dy = -brushSize; dy <= brushSize; dy++) {
-                for (int dx = -brushSize; dx <= brushSize; dx++) {
-                    bool paint = false;
+            // For single-click items, force brush to size 1, circle
+            int effectiveBrushSize = isSingleClickItem ? 0 : brushSize;
+            int effectiveBrushShape = isSingleClickItem ? 0 : static_cast<int>(selectedBrush);
 
-                    if (selectedBrush == BrushShape::Square) {
-                        paint = true;
-                    }
-                    else if (selectedBrush == BrushShape::Circle) {
-                        if (dx*dx + dy*dy <= brushSize*brushSize) paint = true;
-                    }
-                    else if (selectedBrush == BrushShape::Star) {
-                        // Manhattan distance for star shape
-                        if (abs(dx) + abs(dy) <= brushSize) paint = true;
-                    }
+            // Dispatch Brush Shader
+            brushShader.use();
+            brushShader.setInt("brushX", worldX);
+            brushShader.setInt("brushY", worldY);
+            brushShader.setInt("brushSize", effectiveBrushSize);
+            brushShader.setInt("brushShape", effectiveBrushShape);
+            brushShader.setUint("drawElement", static_cast<uint32_t>(selectedElementId));
+            brushShader.setBool("isEraser", erasing);
 
-                    if (paint) {
-                        // Smoke emitted by mouse needs life set, handled in spawnParticle
-                        world->spawnParticle(worldX + dx, worldY + dy, drawElement);
-                    }
-                }
-            }
+            // Bind current state texture for read/write
+            glBindImageTexture(0, world->getCurrentTexture(), 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8UI);
+
+            // Dispatch enough groups to cover brush size
+            int groups = (effectiveBrushSize * 2 + 16) / 16;
+            brushShader.dispatch(groups, groups, 1);
+            glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+            isDrawing = true;
         }
-        isDrawing = true;
-    }
-    else {
+    } else {
         isDrawing = false;
     }
-
-    // Number keys for element selection
-    if (glfwGetKey(window, GLFW_KEY_1) == GLFW_PRESS) selectedElement = Element::Sand;
-    if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) selectedElement = Element::Stone;
-    if (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS) selectedElement = Element::Water;
-    if (glfwGetKey(window, GLFW_KEY_4) == GLFW_PRESS) selectedElement = Element::Lava;
-    if (glfwGetKey(window, GLFW_KEY_5) == GLFW_PRESS) selectedElement = Element::Wood;
-    if (glfwGetKey(window, GLFW_KEY_6) == GLFW_PRESS) selectedElement = Element::Fire;
-    if (glfwGetKey(window, GLFW_KEY_7) == GLFW_PRESS) selectedElement = Element::Smoke;
-    if (glfwGetKey(window, GLFW_KEY_8) == GLFW_PRESS) selectedElement = Element::Dirt;
-    if (glfwGetKey(window, GLFW_KEY_9) == GLFW_PRESS) selectedElement = Element::Seed;
-    if (glfwGetKey(window, GLFW_KEY_0) == GLFW_PRESS) selectedElement = Element::Empty;
 }
 
 void App::renderUI() {
@@ -217,21 +220,76 @@ void App::renderUI() {
     ImGui::Text("World: %dx%d", worldWidth, worldHeight);
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
 
-    // ELEMENTS
+    // ELEMENTS - Data-driven from registry
     ImGui::Separator();
     ImGui::Text("Elements");
 
-    const Element elements[] = {
-        Element::Sand, Element::Dirt, Element::Stone, Element::Wood,
-        Element::Water, Element::Lava, Element::Fire, Element::Smoke,
-        Element::Seed, Element::Empty
-    };
+    const auto& names = registry.getNames();
+    float availWidth = ImGui::GetContentRegionAvail().x;
 
-    for (auto elem : elements) {
-        if (ImGui::RadioButton(getElementName(elem), selectedElement == elem)) {
-            selectedElement = elem;
+    for (size_t i = 0; i < names.size(); i++) {
+        if (names[i].empty()) continue;
+
+        int id = static_cast<int>(i);
+        bool isSelected = (selectedElementId == id);
+
+        // Get element color from registry
+        glm::vec4 elemColor = registry.getColor(id);
+
+        // Display name: "Eraser" for Empty, otherwise use registry name
+        const char* displayName = (id == 0) ? "Eraser" : names[i].c_str();
+
+        // Colored capsule button
+        // Background: element color (dimmed if not selected, bright if selected)
+        float brightness = isSelected ? 1.0f : 0.5f;
+        ImVec4 bgColor(elemColor.r * brightness, elemColor.g * brightness,
+                       elemColor.b * brightness, 1.0f);
+
+        // Text color: pick white or black based on luminance for readability
+        float luminance = 0.299f * elemColor.r + 0.587f * elemColor.g + 0.114f * elemColor.b;
+        ImVec4 textColor = (luminance * brightness > 0.45f)
+            ? ImVec4(0.0f, 0.0f, 0.0f, 1.0f)
+            : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+
+        // Hover/active colors
+        ImVec4 hoverColor(
+            fmin(elemColor.r * 0.8f + 0.2f, 1.0f),
+            fmin(elemColor.g * 0.8f + 0.2f, 1.0f),
+            fmin(elemColor.b * 0.8f + 0.2f, 1.0f),
+            1.0f);
+        ImVec4 activeColor(elemColor.r, elemColor.g, elemColor.b, 1.0f);
+
+        // Selection border
+        if (isSelected) {
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
         }
-        if ((int)elem % 2 != 0) ImGui::SameLine(); // Two columns
+
+        ImGui::PushStyleColor(ImGuiCol_Button, bgColor);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeColor);
+        ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f); // Capsule shape
+
+        // Two-column layout: each button takes half the available width minus spacing
+        float buttonWidth = (availWidth - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (ImGui::Button(displayName, ImVec2(buttonWidth, 24.0f))) {
+            selectedElementId = id;
+        }
+
+        ImGui::PopStyleVar(1);  // FrameRounding
+        ImGui::PopStyleColor(4); // Button, Hovered, Active, Text
+
+        if (isSelected) {
+            ImGui::PopStyleVar(1);  // FrameBorderSize
+            ImGui::PopStyleColor(1); // Border
+        }
+
+        // Two-column: put next button on same line if this was an even-indexed visible item
+        // Use a simple approach: odd IDs go on same line
+        if ((i % 2) == 0 && i + 1 < names.size()) {
+            ImGui::SameLine();
+        }
     }
     ImGui::NewLine();
 
@@ -252,9 +310,7 @@ void App::renderUI() {
 
     SimulationSettings& simSettings = world->simulationSettings();
 
-    ImGui::SliderFloat("Water Visc", &simSettings.waterViscosity, 0.0f, 0.9f);
-    ImGui::SliderFloat("Lava Visc", &simSettings.lavaViscosity, 0.0f, 0.95f);
-    ImGui::SliderInt("Steps/Frame", &simSettings.stepsPerFrame, 1, 10);
+    ImGui::SliderInt("Sim Speed", &simSettings.stepsPerFrame, 1, 10);
 
     // RENDER
     ImGui::Separator();
@@ -282,14 +338,14 @@ void App::renderUI() {
     ImGui::Text("Controls");
     ImGui::BulletText("LMB: Draw");
     ImGui::BulletText("RMB: Erase");
-    ImGui::BulletText("1-4: Select element");
-    ImGui::BulletText("0: Eraser");
 
     ImGui::Separator();
+    const char* selectedName = (selectedElementId == 0) ? "Eraser"
+        : (selectedElementId < static_cast<int>(names.size()) ? names[selectedElementId].c_str() : "Unknown");
     if (isDrawing) {
-        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "Drawing: %s", getElementName(selectedElement));
+        ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "Drawing: %s", selectedName);
     } else {
-        ImGui::Text("Selected: %s", getElementName(selectedElement));
+        ImGui::Text("Selected: %s", selectedName);
     }
 
     ImGui::End();
