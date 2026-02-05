@@ -33,6 +33,8 @@ struct UILayout {
     int bottomPanelHeight = 0;
 };
 
+enum class BrushShape { Circle, Square, Star };
+
 class App {
 public:
     App() = default;
@@ -58,6 +60,7 @@ private:
     // Input state
     bool isDrawing = false;
     Element selectedElement = Element::Sand;
+    BrushShape selectedBrush = BrushShape::Circle;
     int brushSize = 3;
 
     void calculateWindowSize(int& windowWidth, int& windowHeight);

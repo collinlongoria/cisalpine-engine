@@ -125,6 +125,12 @@ const char* App::getElementName(Element elem) const {
         case Element::Stone: return "Stone";
         case Element::Water: return "Water";
         case Element::Lava:  return "Lava";
+        case Element::Wood:  return "Wood";
+        case Element::Fire:  return "Fire";
+        case Element::Smoke: return "Smoke";
+        case Element::Dirt:  return "Dirt";
+        case Element::Seed:  return "Seed";
+        case Element::Grass: return "Grass";
         default:             return "Unknown";
     }
 }
@@ -132,6 +138,7 @@ const char* App::getElementName(Element elem) const {
 void App::handleInput() {
     ImGuiIO& io = ImGui::GetIO();
 
+    // Don't allow drawing if interacting with imgui
     if (io.WantCaptureMouse) {
         isDrawing = false;
         return;
@@ -150,7 +157,21 @@ void App::handleInput() {
 
             for (int dy = -brushSize; dy <= brushSize; dy++) {
                 for (int dx = -brushSize; dx <= brushSize; dx++) {
-                    if (dx*dx + dy*dy <= brushSize*brushSize) {
+                    bool paint = false;
+
+                    if (selectedBrush == BrushShape::Square) {
+                        paint = true;
+                    }
+                    else if (selectedBrush == BrushShape::Circle) {
+                        if (dx*dx + dy*dy <= brushSize*brushSize) paint = true;
+                    }
+                    else if (selectedBrush == BrushShape::Star) {
+                        // Manhattan distance for star shape
+                        if (abs(dx) + abs(dy) <= brushSize) paint = true;
+                    }
+
+                    if (paint) {
+                        // Smoke emitted by mouse needs life set, handled in spawnParticle
                         world->spawnParticle(worldX + dx, worldY + dy, drawElement);
                     }
                 }
@@ -167,6 +188,11 @@ void App::handleInput() {
     if (glfwGetKey(window, GLFW_KEY_2) == GLFW_PRESS) selectedElement = Element::Stone;
     if (glfwGetKey(window, GLFW_KEY_3) == GLFW_PRESS) selectedElement = Element::Water;
     if (glfwGetKey(window, GLFW_KEY_4) == GLFW_PRESS) selectedElement = Element::Lava;
+    if (glfwGetKey(window, GLFW_KEY_5) == GLFW_PRESS) selectedElement = Element::Wood;
+    if (glfwGetKey(window, GLFW_KEY_6) == GLFW_PRESS) selectedElement = Element::Fire;
+    if (glfwGetKey(window, GLFW_KEY_7) == GLFW_PRESS) selectedElement = Element::Smoke;
+    if (glfwGetKey(window, GLFW_KEY_8) == GLFW_PRESS) selectedElement = Element::Dirt;
+    if (glfwGetKey(window, GLFW_KEY_9) == GLFW_PRESS) selectedElement = Element::Seed;
     if (glfwGetKey(window, GLFW_KEY_0) == GLFW_PRESS) selectedElement = Element::Empty;
 }
 
@@ -191,45 +217,46 @@ void App::renderUI() {
     ImGui::Text("World: %dx%d", worldWidth, worldHeight);
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
 
-    // === ELEMENTS ===
+    // ELEMENTS
     ImGui::Separator();
     ImGui::Text("Elements");
 
-    const Element elements[] = {Element::Sand, Element::Stone, Element::Water, Element::Lava, Element::Empty};
-    const char* keys[] = {"1", "2", "3", "4", "0"};
+    const Element elements[] = {
+        Element::Sand, Element::Dirt, Element::Stone, Element::Wood,
+        Element::Water, Element::Lava, Element::Fire, Element::Smoke,
+        Element::Seed, Element::Empty
+    };
 
-    for (int i = 0; i < 5; i++) {
-        bool selected = (selectedElement == elements[i]);
-        if (selected) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.6f, 0.3f, 1.0f));
+    for (auto elem : elements) {
+        if (ImGui::RadioButton(getElementName(elem), selectedElement == elem)) {
+            selectedElement = elem;
         }
-
-        char label[32];
-        snprintf(label, sizeof(label), "[%s] %s", keys[i], getElementName(elements[i]));
-
-        if (ImGui::Button(label, ImVec2(-1, 0))) {
-            selectedElement = elements[i];
-        }
-
-        if (selected) {
-            ImGui::PopStyleColor();
-        }
+        if ((int)elem % 2 != 0) ImGui::SameLine(); // Two columns
     }
+    ImGui::NewLine();
 
+    // BRUSH
     ImGui::Separator();
-    ImGui::Text("Brush Size");
-    ImGui::SliderInt("##brush", &brushSize, 1, 15);
+    ImGui::Text("Brush");
+    ImGui::SliderInt("Size", &brushSize, 1, 15);
 
-    // === SIMULATION SETTINGS ===
+    if (ImGui::RadioButton("Circle", selectedBrush == BrushShape::Circle)) selectedBrush = BrushShape::Circle;
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Square", selectedBrush == BrushShape::Square)) selectedBrush = BrushShape::Square;
+    ImGui::SameLine();
+    if (ImGui::RadioButton("Star", selectedBrush == BrushShape::Star)) selectedBrush = BrushShape::Star;
+
+    // SIMULATION
     ImGui::Separator();
     ImGui::Text("Simulation");
 
     SimulationSettings& simSettings = world->simulationSettings();
 
-    ImGui::SliderFloat("Water Viscosity", &simSettings.waterViscosity, 0.0f, 0.9f, "%.2f");
-    ImGui::SliderFloat("Lava Viscosity", &simSettings.lavaViscosity, 0.0f, 0.95f, "%.2f");
+    ImGui::SliderFloat("Water Visc", &simSettings.waterViscosity, 0.0f, 0.9f);
+    ImGui::SliderFloat("Lava Visc", &simSettings.lavaViscosity, 0.0f, 0.95f);
+    ImGui::SliderInt("Steps/Frame", &simSettings.stepsPerFrame, 1, 10);
 
-    // === RENDER SETTINGS ===
+    // RENDER
     ImGui::Separator();
     ImGui::Text("Rendering");
 
@@ -244,13 +271,13 @@ void App::renderUI() {
         ImGui::SliderFloat("Radius", &settings.glowRadius, 2.0f, 20.0f);
     }
 
-    // === ACTIONS ===
+    // ACTIONS
     ImGui::Separator();
     if (ImGui::Button("Clear World", ImVec2(-1, 0))) {
         world->clear();
     }
 
-    // === CONTROLS ===
+    // CONTROLS
     ImGui::Separator();
     ImGui::Text("Controls");
     ImGui::BulletText("LMB: Draw");

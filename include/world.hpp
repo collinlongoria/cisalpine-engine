@@ -29,13 +29,23 @@ enum class Element : uint8_t {
     Stone = 2,
     Water = 3,
     Lava = 4,
+    Wood = 5,
+    Fire = 6,
+    Smoke = 7,
+    Dirt = 8,
+    Seed = 9,
+    Grass = 10,
     COUNT
 };
 
 // Simulation settings
 struct SimulationSettings {
-    float waterViscosity = 0.05f;  // 0 = instant flow, 1 = no flow
-    float lavaViscosity = 0.75f;   // Lava is thick
+    // Viscosity: 0 = instant flow, 1 = no flow
+    float waterViscosity = 0.05f;
+    float lavaViscosity = 0.75f;
+
+    // Simulation loops per frame
+    int stepsPerFrame = 4;
 };
 
 // Rendering Settings

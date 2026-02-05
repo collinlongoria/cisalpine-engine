@@ -14,8 +14,14 @@ const uint SAND  = 1u;
 const uint STONE = 2u;
 const uint WATER = 3u;
 const uint LAVA  = 4u;
+const uint WOOD  = 5u;
+const uint FIRE  = 6u;
+const uint SMOKE = 7u;
+const uint DIRT  = 8u;
+const uint SEED  = 9u;
+const uint GRASS = 10u;
 
-vec4 getColor(uint element, ivec2 pos) {
+vec4 getColor(uint element, uint life, ivec2 pos) {
     // Add slight variation based on position
     float variation = fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
 
@@ -29,24 +35,35 @@ vec4 getColor(uint element, ivec2 pos) {
         case WATER:
             return vec4(0.2, 0.4 + variation * 0.1, 0.8 + variation * 0.1, 0.85);
         case LAVA:
-            // Animated lava color
             float pulse = sin(time * 3.0 + variation * 6.28) * 0.5 + 0.5;
             return vec4(1.0, 0.3 + pulse * 0.3, 0.0 + pulse * 0.1, 1.0);
+        case WOOD:
+            return vec4(0.4 + variation*0.05, 0.25 + variation*0.05, 0.1, 1.0);
+        case FIRE:
+            float flicker = sin(time * 10.0 + variation * 10.0) * 0.5 + 0.5;
+            float lifeFactor = float(life) / 255.0;
+            return vec4(1.0, 0.5 * lifeFactor + flicker * 0.3, 0.1, 0.9 * lifeFactor); // Orange -> Red
+        case SMOKE:
+            float density = float(life) / 255.0;
+            return vec4(0.5, 0.5, 0.5, 0.4 * density);
+        case DIRT:
+            return vec4(0.35 + variation*0.05, 0.25 + variation*0.05, 0.15, 1.0);
+        case SEED:
+            return vec4(0.6, 0.8, 0.2, 1.0);
+        case GRASS:
+            return vec4(0.1, 0.6 + variation*0.1, 0.1, 1.0);
         default:
-            return vec4(1.0, 0.0, 1.0, 1.0);  // Magenta for unknown
+            return vec4(1.0, 0.0, 1.0, 1.0);
     }
 }
 
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(stateIn);
-
-    if (pos.x >= size.x || pos.y >= size.y) {
-        return;
-    }
+    if (pos.x >= size.x || pos.y >= size.y) return;
 
     uvec4 state = imageLoad(stateIn, pos);
-    vec4 color = getColor(state.r, pos);
+    vec4 color = getColor(state.r, state.g, pos);
 
     imageStore(displayOut, pos, color);
 }

@@ -121,9 +121,16 @@ void World::createQuad() {
 void World::spawnParticle(int x, int y, Element element) {
     if (x < 0 || x >= worldWidth || y < 0 || y >= worldHeight) return;
 
+    // R = Element
+    // G = Life / Variant
+    // B = Velocity / Misc
+    uint8_t life = 0;
+    if (element == Element::Fire || element == Element::Smoke) life = 255;
+    if (element == Element::Grass) life = rand() % 255;
+
     uint8_t pixel[4] = {
         static_cast<uint8_t>(element),
-        0,
+        life,
         128,
         0
     };
@@ -175,7 +182,9 @@ void World::update(float dt) {
 
     // Fixed timestep simulation
     while (accumulatedTime >= FIXED_TIMESTEP) {
-        simulationStep();
+        for (int i = 0; i < simSettings.stepsPerFrame; i++) {
+            simulationStep();
+        }
         accumulatedTime -= FIXED_TIMESTEP;
     }
 }

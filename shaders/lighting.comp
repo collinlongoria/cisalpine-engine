@@ -12,6 +12,7 @@ uniform float glowRadius;
 uniform float time;
 
 const uint LAVA = 4u;
+const uint FIRE = 6u;
 
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
@@ -43,20 +44,21 @@ void main() {
             
             uvec4 state = imageLoad(stateIn, samplePos);
             
-            if (state.r == LAVA) {
+            if (state.r == LAVA || state.r == FIRE) {
                 float dist = length(vec2(dx, dy));
                 if (dist <= glowRadius) {
-                    // Falloff based on distance
                     float falloff = 1.0 - (dist / glowRadius);
-                    falloff = falloff * falloff;  // Quadratic falloff
-                    
-                    // Animated glow
+                    falloff = falloff * falloff;
+
                     float variation = fract(sin(dot(vec2(samplePos), vec2(12.9898, 78.233))) * 43758.5453);
-                    float pulse = sin(time * 2.0 + variation * 6.28) * 0.2 + 0.8;
-                    
-                    // Orange-red glow color
-                    vec3 lavaGlow = vec3(1.0, 0.4, 0.1) * falloff * pulse * glowIntensity;
-                    glow += lavaGlow;
+                    float pulse = sin(time * 5.0 + variation * 6.28) * 0.2 + 0.8;
+
+                    vec3 lightColor;
+                    if (state.r == LAVA) lightColor = vec3(1.0, 0.4, 0.1);
+                    else lightColor = vec3(1.0, 0.6, 0.2); // Fire is brighter/yellower
+
+                    vec3 glowColor = lightColor * falloff * pulse * glowIntensity;
+                    glow += glowColor;
                 }
             }
         }
