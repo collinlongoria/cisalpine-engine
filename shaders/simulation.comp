@@ -31,7 +31,7 @@ const int TYPE_GRANULAR = 1;
 const int TYPE_LIQUID   = 2;
 const int TYPE_GAS      = 3;
 
-// Helpers
+// ─── Helpers ───
 
 bool inBounds(ivec2 p) {
     return (p.x >= 0 && p.x < int(worldSize.x) &&
@@ -40,6 +40,11 @@ bool inBounds(ivec2 p) {
 
 float random01(ivec2 pos) {
     return fract(sin(dot(vec2(pos) + time, vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Second independent hash for when we need two uncorrelated randoms at the same pos
+float random01b(ivec2 pos) {
+    return fract(sin(dot(vec2(pos) + time * 1.7, vec2(39.346, 11.135))) * 23421.6312);
 }
 
 uint hashU32(uint x) {
@@ -55,6 +60,11 @@ uint hash2u(uvec2 v) {
     return hashU32(v.x ^ (v.y + 0x9e3779b9u + (v.x<<6) + (v.x>>2)));
 }
 
+// Hash with extra salt for independent random streams
+uint hash3u(uvec2 v, uint salt) {
+    return hashU32(v.x ^ (v.y + salt + 0x9e3779b9u + (v.x<<6) + (v.x>>2)));
+}
+
 uvec4 getState(ivec2 pos) {
     if (!inBounds(pos)) {
         return uvec4(255u, 0u, 0u, 0u); // solid boundary sentinel
@@ -65,7 +75,7 @@ uvec4 getState(ivec2 pos) {
 uint getElement(ivec2 pos) { return getState(pos).r; }
 uint getLife(ivec2 pos) { return getState(pos).g; }
 
-// Type checks
+// ─── Type checks ───
 
 bool isStatic(uint id) {
     return id < MAX_ELEMENTS && elements[id].type == TYPE_STATIC;
@@ -104,7 +114,7 @@ bool hasLife(uint id) {
     return id < MAX_ELEMENTS && elements[id].maxLife > 0;
 }
 
-// Movement Logic
+// ─── Movement Logic ───
 
 bool canDisplace(uint mover, uint target) {
     if (target == EMPTY) return true;
@@ -141,9 +151,34 @@ ivec2 desiredDest(ivec2 src, uint elem) {
 
     bool leftFirst = (hash2u(uvec2(src) ^ uvec2(frameCount)) & 1u) == 0u;
 
-    // GRANULAR
+    // ─── Light element drift ───
+    // For granular elements, lighter particles get a chance to drift horizontally
+    // while falling, simulating minor air currents. The probability and frequency
+    // scale inversely with density — lighter = more drift.
     if (type == TYPE_GRANULAR) {
-        if (canDisplace(elem, getElement(down))) return down;
+        float density = elements[elem].density;
+
+        // Only apply drift to elements that are actively falling (empty below)
+        if (canDisplace(elem, getElement(down))) {
+            // Drift chance: density 1 -> ~50% drift, density 8 -> ~15%, density 12+ -> ~5%
+            // Formula: driftChance = clamp(3.0 / density, 0.02, 0.5)
+            float driftChance = clamp(3.0 / max(density, 0.5), 0.02, 0.5);
+
+            float roll = float(hash3u(uvec2(src), frameCount) & 0xFFFFu) / 65535.0;
+            if (roll < driftChance) {
+                // Drift sideways while falling — pick diagonal instead of straight down
+                if (leftFirst) {
+                    if (canDisplace(elem, getElement(downL))) return downL;
+                    if (canDisplace(elem, getElement(downR))) return downR;
+                } else {
+                    if (canDisplace(elem, getElement(downR))) return downR;
+                    if (canDisplace(elem, getElement(downL))) return downL;
+                }
+            }
+            // Normal straight-down fall
+            return down;
+        }
+        // Can't fall straight — try diagonals normally
         if (leftFirst) {
             if (canDisplace(elem, getElement(downL))) return downL;
             if (canDisplace(elem, getElement(downR))) return downR;
@@ -221,6 +256,204 @@ ivec2 pickWinnerForDest(ivec2 dest) {
     return found ? best : ivec2(999999);
 }
 
+// ─── Sapling Tree Growth (Pull-Based) ───
+//
+// Architecture: Every pixel checks whether a nearby growing sapling "claims" it.
+// The tree shape is deterministic from the sapling's position, so any pixel can
+// independently compute whether it belongs to a given tree at a given growth step.
+//
+// Sapling state encoding:
+//   R = SAPLING
+//   G = target tree height (set once on growth start, 12-25)
+//   B = current growth step (0 = not started, 1+ = growing)
+//   A = unused
+//
+// Search radius: Each pixel scans downward and horizontally for a growing sapling
+// within a bounded region. Since trees grow upward from the sapling, a pixel at
+// position P only needs to check saplings below it (within max tree height).
+
+// Max possible tree height — limits the search range
+const int MAX_TREE_HEIGHT = 25;
+const int MAX_TREE_SPREAD = 8; // max horizontal reach (branch + leaves)
+
+// Check if sapling is touching dirt or grass (soil)
+bool isTouchingSoil(ivec2 pos) {
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            ivec2 np = pos + ivec2(dx, dy);
+            if (inBounds(np)) {
+                uint e = getElement(np);
+                if (e == DIRT || e == GRASS) return true;
+            }
+        }
+    }
+    return false;
+}
+
+// Given a sapling at saplingPos with a deterministic seed, compute what element
+// (if any) should exist at queryPos when the tree has grown up to growthStep.
+// Returns 0 = nothing, WOOD, or PLANT.
+uint treeElementAt(ivec2 saplingPos, ivec2 queryPos, uint targetHeight, uint growthStep) {
+    // Relative position from sapling base
+    int rx = queryPos.x - saplingPos.x;
+    int ry = queryPos.y - saplingPos.y;
+
+    // Must be above or at sapling level
+    if (ry < 0) return EMPTY;
+
+    // Deterministic RNG seeded by sapling position
+    uint treeSeed = hash2u(uvec2(saplingPos));
+
+    // ── Trunk ──
+    // Trunk is a straight column from ry=1 to ry=targetHeight, at rx=0
+    if (rx == 0 && ry >= 1 && uint(ry) <= targetHeight) {
+        // Has the trunk grown this far yet?
+        if (uint(ry) <= growthStep) {
+            return WOOD;
+        }
+        return EMPTY;
+    }
+
+    // Everything below is only relevant once growth has reached this height
+    // (branches/leaves only appear once the trunk at that Y level is placed)
+
+    // ── Branches ──
+    // At each trunk Y level (after height 3), deterministically decide if there's
+    // a branch, which direction, and how long.
+    // We iterate trunk levels to see if any branch reaches queryPos.
+    uint branchStartY = 4u;
+    for (uint trunkY = branchStartY; trunkY <= targetHeight && trunkY <= growthStep; trunkY++) {
+        uint branchSeed = hash3u(uvec2(saplingPos), trunkY * 37u);
+        float branchRoll = float(branchSeed & 0xFFFFu) / 65535.0;
+
+        // Branch probability: ramps up toward middle, drops near top
+        float heightRatio = float(trunkY) / float(targetHeight);
+        float branchChance = 0.0;
+        if (heightRatio < 0.85) {
+            // Peak chance around 40-70% height
+            float midFactor = 1.0 - abs(heightRatio - 0.55) * 2.5;
+            branchChance = clamp(midFactor * 0.7, 0.15, 0.65);
+        }
+
+        if (branchRoll >= branchChance) continue; // no branch at this level
+
+        // Branch direction: left or right
+        bool goLeft = (branchSeed & 0x10000u) != 0u;
+        int dir = goLeft ? -1 : 1;
+
+        // Branch length: 2-5, longer near middle
+        float midBonus = 1.0 - abs(heightRatio - 0.5) * 2.0;
+        uint maxLen = uint(clamp(midBonus * 4.0 + 2.0, 2.0, 5.0));
+        uint branchLen = (hash3u(uvec2(saplingPos), trunkY * 53u + 7u) % maxLen) + 1u;
+
+        // Check if queryPos lies on this branch
+        for (uint b = 1u; b <= branchLen; b++) {
+            ivec2 bp = ivec2(saplingPos.x + int(b) * dir, saplingPos.y + int(trunkY));
+            // Slight upward curve for longer branches
+            if (b > 2u) bp.y += 1;
+
+            if (queryPos == bp) {
+                return WOOD;
+            }
+
+            // Leaf clusters at branch tip (last 2 segments)
+            if (b >= branchLen - 1u) {
+                // Check if queryPos is in the leaf cluster around this point
+                int ldx = queryPos.x - bp.x;
+                int ldy = queryPos.y - bp.y;
+                if (abs(ldx) <= 2 && ldy >= -1 && ldy <= 2) {
+                    if (abs(ldx) + abs(ldy) <= 3) {
+                        float leafRoll = float(hash3u(uvec2(queryPos), trunkY * 71u + 200u) & 0xFFFFu) / 65535.0;
+                        if (leafRoll < 0.55) {
+                            return PLANT;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ── Top canopy ──
+    // Only appears once growth reaches near the top
+    if (growthStep >= targetHeight - 2u) {
+        int canopyRadius = int(targetHeight) / 4 + 2;
+        // Canopy is centered at top of trunk
+        ivec2 canopyCenter = ivec2(saplingPos.x, saplingPos.y + int(targetHeight));
+        int cdx = queryPos.x - canopyCenter.x;
+        int cdy = queryPos.y - canopyCenter.y;
+
+        if (abs(cdx) <= canopyRadius && cdy >= -1 && cdy <= canopyRadius + 1) {
+            float dist = sqrt(float(cdx*cdx + cdy*cdy));
+            if (dist <= float(canopyRadius) + 0.5) {
+                float leafRoll = float(hash3u(uvec2(queryPos), targetHeight * 97u + 500u) & 0xFFFFu) / 65535.0;
+                // Noise to break up the circle
+                float noise = float(hash3u(uvec2(queryPos), 999u) & 0xFFu) / 255.0;
+                if (leafRoll < 0.55 && noise > 0.25) {
+                    // Don't overwrite trunk
+                    if (!(cdx == 0 && cdy <= 0)) {
+                        return PLANT;
+                    }
+                }
+            }
+        }
+    }
+
+    return EMPTY;
+}
+
+// Search for a growing sapling that claims this position.
+// Returns the element to place (WOOD/PLANT) or EMPTY if unclaimed.
+//
+// Optimization: First do a fast vertical-only scan (trunk check is the most
+// common claim). Then do a bounded horizontal scan for branch/leaf claims.
+uint checkTreeClaim(ivec2 pos) {
+    // Fast path: trunk claim — sapling directly below us at rx=0
+    for (int dy = 1; dy <= MAX_TREE_HEIGHT; dy++) {
+        ivec2 candidatePos = pos + ivec2(0, -dy);
+        if (!inBounds(candidatePos)) break;
+
+        uvec4 candidateState = getState(candidatePos);
+        if (candidateState.r != SAPLING) continue;
+
+        uint growthStep = candidateState.b;
+        if (growthStep == 0u) continue;
+
+        uint targetHeight = candidateState.g;
+
+        // Quick trunk check: we're at ry=dy directly above sapling
+        if (uint(dy) <= growthStep && uint(dy) <= targetHeight) {
+            return WOOD;
+        }
+
+        // Also check if this sapling's canopy claims us
+        uint result = treeElementAt(candidatePos, pos, targetHeight, growthStep);
+        if (result != EMPTY) return result;
+    }
+
+    // Horizontal scan: branch/leaf claims from saplings not directly below.
+    // Only need to scan within branch + leaf reach horizontally.
+    for (int dx = -MAX_TREE_SPREAD; dx <= MAX_TREE_SPREAD; dx++) {
+        if (dx == 0) continue; // Already handled above
+        for (int dy = 0; dy <= MAX_TREE_HEIGHT + 3; dy++) {
+            ivec2 candidatePos = pos + ivec2(dx, -dy);
+            if (!inBounds(candidatePos)) continue;
+
+            uvec4 candidateState = getState(candidatePos);
+            if (candidateState.r != SAPLING) continue;
+
+            uint growthStep = candidateState.b;
+            if (growthStep == 0u) continue;
+
+            uint targetHeight = candidateState.g;
+            uint result = treeElementAt(candidatePos, pos, targetHeight, growthStep);
+            if (result != EMPTY) return result;
+        }
+    }
+
+    return EMPTY;
+}
+
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     if (!inBounds(pos)) return;
@@ -235,11 +468,11 @@ void main() {
         return;
     }
 
+    // ═══════════════════════════════════════
     // REACTION LOGIC
+    // ═══════════════════════════════════════
 
     // Water + Lava interaction
-    // Water touching lava -> this water becomes smoke
-    // Lava touching water -> this lava becomes obsidian
     if (elem == WATER) {
         bool touchingLava = false;
         for (int dy = -1; dy <= 1; dy++) {
@@ -273,7 +506,6 @@ void main() {
     if (hasLife(elem) && life > 0u) {
         uint decayRate = 4u;
         if (life <= decayRate) {
-            // Death transformation - Fire becomes Smoke, others become Empty
             uint deathElem = (elem == FIRE) ? SMOKE : EMPTY;
             uint deathLife = (deathElem == SMOKE) ? 200u : 0u;
             imageStore(stateOut, pos, uvec4(deathElem, deathLife, 0, 0));
@@ -297,40 +529,135 @@ void main() {
         }
     }
 
+    // ═══════════════════════════════════════
     // SEED -> GRASS Logic
-    // When a seed lands on dirt (dirt is directly below), it becomes grass with max life
+    // When a seed is resting on dirt or grass (below or diagonal-below),
+    // convert the seed to grass and also spread grass to adjacent dirt.
+    // ═══════════════════════════════════════
     if (elem == SEED) {
+        // Check if resting: can't fall further (something solid below)
         ivec2 below = pos + ivec2(0, -1);
-        if (inBounds(below) && getElement(below) == DIRT) {
-            imageStore(stateOut, pos, uvec4(GRASS, 255u, 0, 0));
-            return;
-        }
-    }
+        bool resting = !inBounds(below) || !canDisplace(elem, getElement(below));
 
-    // GRASS Spreading
-    // Grass spreads to adjacent dirt cells. The spread probability is proportional
-    // to life: high life = more likely to spread. Each new grass gets less life,
-    // creating natural diminishing growth outward from the seed point.
-    if (elem == GRASS && life > 30u) {
-        // Spread chance scales with life: life=255 -> 8% chance, life=30 -> ~1%
-        float spreadChance = (float(life) / 255.0) * 0.08;
-        if (random01(pos) < spreadChance) {
-            // Pick a random cardinal direction
-            ivec2 dirs[4] = ivec2[4](ivec2(1,0), ivec2(-1,0), ivec2(0,-1), ivec2(0,1));
-            int idx = int(random01(pos + ivec2(int(frameCount), 0)) * 4.0);
-            idx = clamp(idx, 0, 3);
-            ivec2 target = pos + dirs[idx];
-
-            if (inBounds(target) && getElement(target) == DIRT) {
-                // New grass gets less life than parent -> diminishing spread
-                uint newLife = life - 25u;
-                if (newLife < 30u) newLife = 30u; // Minimum life to still look alive
-                imageStore(stateOut, target, uvec4(GRASS, newLife, 0, 0));
+        if (resting) {
+            // Check all neighbors for dirt or grass to convert
+            bool touchingSoil = false;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    ivec2 np = pos + ivec2(dx, dy);
+                    if (inBounds(np)) {
+                        uint ne = getElement(np);
+                        if (ne == DIRT || ne == GRASS) {
+                            touchingSoil = true;
+                        }
+                    }
+                }
+            }
+            if (touchingSoil) {
+                // Seed becomes grass with full life (high spread energy)
+                imageStore(stateOut, pos, uvec4(GRASS, 255u, 0, 0));
+                return;
             }
         }
     }
 
-    //  MOVEMENT
+    // ═══════════════════════════════════════
+    // GRASS Spreading
+    // Grass spreads to adjacent dirt cells. Spread probability scales with life.
+    // Each new grass gets reduced life -> natural diminishing growth.
+    // Since grass is now granular, it only spreads when "settled" (can't fall).
+    // ═══════════════════════════════════════
+if (elem == DIRT) {
+        // Check 8 neighbors
+        ivec2 dirs[8] = ivec2[8](
+            ivec2(1,0), ivec2(-1,0), ivec2(0,-1), ivec2(0,1),
+            ivec2(1,1), ivec2(-1,1), ivec2(1,-1), ivec2(-1,-1)
+        );
+
+        // Randomize start index to avoid directional bias
+        int startIdx = int(random01b(pos) * 8.0);
+
+        for (int i = 0; i < 8; i++) {
+            int idx = (startIdx + i) % 8;
+            ivec2 neighborPos = pos + dirs[idx];
+
+            if (inBounds(neighborPos)) {
+                uvec4 nState = getState(neighborPos);
+                uint nElem = nState.r;
+                uint nLife = nState.g;
+
+                // Found a valid grass neighbor?
+                if (nElem == GRASS && nLife > 30u) {
+                    // Check if that grass is settled (not falling)
+                    ivec2 belowNeighbor = neighborPos + ivec2(0, -1);
+                    bool isSettled = !inBounds(belowNeighbor) || !canDisplace(GRASS, getElement(belowNeighbor));
+
+                    if (isSettled) {
+                        float spreadChance = (float(nLife) / 255.0) * 0.10; // 10% base chance
+                        if (random01(pos) < spreadChance) {
+                            uint newLife = nLife - 20u;
+                            if (newLife < 30u) newLife = 30u;
+
+                            // Become grass!
+                            imageStore(stateOut, pos, uvec4(GRASS, newLife, 0, 0));
+                            return; // Stop processing this pixel
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════
+    // SAPLING State Machine
+    // The sapling itself only manages its own state transitions.
+    // The actual tree pixel placement is handled pull-side by empty pixels below.
+    // ═══════════════════════════════════════
+    if (elem == SAPLING) {
+        uint growthStep = cur.b;
+        uint targetHeight = cur.g;
+
+        // Phase 0: Not growing yet — check if touching soil to start
+        if (growthStep == 0u) {
+            if (isTouchingSoil(pos)) {
+                // Start growing: pick random tree height 12-25
+                uint treeHeight = hash2u(uvec2(pos)) % 14u + 12u;
+                imageStore(stateOut, pos, uvec4(SAPLING, treeHeight, 1u, 0u));
+                return;
+            }
+            // Not touching soil — fall through to movement logic below
+        }
+        // Phase 1+: Actively growing — advance growth step each frame
+        else {
+            if (growthStep >= targetHeight) {
+                // Done growing — become wood (the trunk base)
+                imageStore(stateOut, pos, uvec4(WOOD, 0u, 0u, 0u));
+                return;
+            } else {
+                // Advance to next growth step
+                imageStore(stateOut, pos, uvec4(SAPLING, targetHeight, growthStep + 1u, 0u));
+                return;
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════
+    // TREE CLAIM CHECK (Pull-based)
+    // Empty pixels check if a growing sapling claims them as part of its tree.
+    // This is where wood and plant pixels actually get placed.
+    // ═══════════════════════════════════════
+    if (elem == EMPTY) {
+        uint claimed = checkTreeClaim(pos);
+        if (claimed != EMPTY) {
+            imageStore(stateOut, pos, uvec4(claimed, 0u, 0u, 0u));
+            return;
+        }
+    }
+
+    // ═══════════════════════════════════════
+    // MOVEMENT
+    // ═══════════════════════════════════════
 
     // If someone wins moving into us, we get overwritten
     ivec2 winner = pickWinnerForDest(pos);

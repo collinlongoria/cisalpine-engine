@@ -76,6 +76,19 @@ vec4 getColor(uint element, uint life, ivec2 pos) {
         varied.g -= (1.0 - lifeFactor) * 0.1;
     }
 
+    // Plant (leaves) - subtle wind sway and variation for organic look
+    if (element == PLANT) {
+        float sway = sin(time * 1.5 + float(pos.x) * 0.3 + float(pos.y) * 0.2) * 0.04;
+        varied.g += sway + variation * 0.12;
+        varied.r += variation * 0.05;
+    }
+
+    // Sapling - pulsing growth indicator while growing
+    if (element == SAPLING) {
+        float pulse = sin(time * 4.0) * 0.15 + 0.85;
+        varied *= pulse;
+    }
+
     // Liquids - slight shimmer
     if (type == 2) { // Liquid
         float shimmer = sin(time * 2.0 + float(pos.x) * 0.5 + float(pos.y) * 0.3) * 0.05;
