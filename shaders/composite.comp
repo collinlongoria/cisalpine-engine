@@ -1,0 +1,140 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba8ui, binding = 0) uniform readonly  uimage2D stateIn;
+layout(rgba8,   binding = 1) uniform readonly  image2D  colorIn;
+layout(rgba16f, binding = 2) uniform readonly  image2D  normalIn;
+layout(rgba16f, binding = 3) uniform readonly  image2D  lightmapIn;
+layout(rgba8,   binding = 4) uniform writeonly image2D  displayOut;
+
+struct ElementData {
+    vec4 color;
+    int type;
+    float density;
+    float viscosity;
+    float probability;
+    int flammability;
+    int glow;
+    int maxLife;
+    int gemstone;
+    float lightRadius;
+    float lightIntensity;
+    float ior;
+    int _pad;
+};
+
+layout(std430, binding = 2) buffer ElementRegistry {
+    ElementData elements[];
+};
+
+uniform float ambientLight;
+uniform float specularStrength;
+uniform float time;
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(stateIn);
+    if (pos.x >= size.x || pos.y >= size.y) return;
+
+    uvec4 state   = imageLoad(stateIn, pos);
+    vec4 color    = imageLoad(colorIn, pos);
+    vec4 normData = imageLoad(normalIn, pos);
+    vec4 light    = imageLoad(lightmapIn, pos);
+
+    uint elem = state.r;
+
+    // Empty pixels: just use the base color (background), no lighting
+    if (elem == EMPTY) {
+        // Even empty space gets a subtle glow from nearby light for atmosphere
+        vec3 ambientGlow = light.rgb * 0.08;
+        vec3 final = color.rgb + ambientGlow;
+        imageStore(displayOut, pos, vec4(clamp(final, 0.0, 1.0), color.a));
+        return;
+    }
+
+    // Light element itself: always full brightness, it IS the light
+    if (elem == LIGHT) {
+        imageStore(displayOut, pos, vec4(color.rgb, 1.0));
+        return;
+    }
+
+    vec3 normal = normData.xyz;
+    float specPower = normData.w;
+    vec3 lightColor = light.rgb;
+
+    // ─── Self-emitting elements ───
+    // Fire, Lava, and other glowing elements emit their own light
+    bool isSelfLit = false;
+    if (elem < MAX_ELEMENTS) {
+        if (elements[elem].glow == 1 || elem == FIRE) {
+            isSelfLit = true;
+        }
+    }
+
+    // ─── Diffuse lighting ───
+    // The lightmap already contains directional light info accumulated from all sources.
+    // We use the normal to modulate how much light this pixel receives.
+    // Since we don't have a single light direction, we use the light intensity directly
+    // with a normal-based modulation for depth/shape.
+    float lightIntensity = length(lightColor);
+
+    // Normal-based shading: pixels facing "up" (away from surface) get more light
+    // This gives the impression of directional lighting even with point lights
+    float normalFactor = normal.z * 0.6 + 0.4; // Bias toward receiving light
+
+    vec3 diffuse = color.rgb * (ambientLight + lightColor * normalFactor);
+
+    // ─── Specular highlights ───
+    // For reflective materials (gemstones, water, obsidian)
+    vec3 specular = vec3(0.0);
+    if (specPower > 1.0 && lightIntensity > 0.05) {
+        // Approximate view direction (looking straight at the 2D plane)
+        vec3 viewDir = vec3(0.0, 0.0, 1.0);
+
+        // Approximate the dominant light direction from the lightmap gradient
+        ivec2 pR = clamp(pos + ivec2(1, 0), ivec2(0), size - 1);
+        ivec2 pL = clamp(pos + ivec2(-1, 0), ivec2(0), size - 1);
+        ivec2 pU = clamp(pos + ivec2(0, 1), ivec2(0), size - 1);
+        ivec2 pD = clamp(pos + ivec2(0, -1), ivec2(0), size - 1);
+        vec3 lightDir = normalize(vec3(
+            imageLoad(lightmapIn, pR).r - imageLoad(lightmapIn, pL).r,
+            imageLoad(lightmapIn, pU).r - imageLoad(lightmapIn, pD).r,
+            0.5
+        ));
+
+        // Blinn-Phong specular
+        vec3 halfDir = normalize(lightDir + viewDir);
+        float spec = pow(max(dot(normal, halfDir), 0.0), specPower);
+
+        specular = lightColor * spec * specularStrength;
+
+        // Gemstones: extra rainbow dispersion effect
+        if (elem < MAX_ELEMENTS && elements[elem].gemstone == 1) {
+            // Chromatic dispersion: slightly shift specular color based on angle
+            float angle = dot(normal.xy, lightDir.xy);
+            vec3 dispersion = vec3(
+                spec * (1.0 + angle * 0.3),
+                spec,
+                spec * (1.0 - angle * 0.3)
+            );
+            specular = lightColor * dispersion * specularStrength * 1.5;
+        }
+    }
+
+    // ─── Self-illumination ───
+    vec3 emission = vec3(0.0);
+    if (isSelfLit) {
+        // Self-lit elements are always visible at their base color
+        emission = color.rgb * 0.6;
+    }
+
+    // ─── Final composition ───
+    vec3 final = diffuse + specular + emission;
+
+    // Tone mapping: soft clamp to prevent harsh clipping
+    final = final / (final + vec3(1.0)); // Reinhard
+    final = pow(final, vec3(1.0 / 1.1)); // Slight gamma for warmth
+
+    imageStore(displayOut, pos, vec4(clamp(final, 0.0, 1.0), color.a));
+}

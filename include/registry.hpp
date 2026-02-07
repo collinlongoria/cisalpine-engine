@@ -33,9 +33,13 @@ struct GPUElementData {
     int flammability;       // 4 bytes  (offset 32)
     int glow;               // 4 bytes  (offset 36)
     int maxLife;            // 4 bytes  (offset 40)
-    int _pad;               // 4 bytes  (offset 44) - pad to 48 bytes (multiple of 16)
+    int gemstone;           // 4 bytes  (offset 44) - gemstone flag for specular normals
+    float lightRadius;      // 4 bytes  (offset 48) - radius of light emission
+    float lightIntensity;   // 4 bytes  (offset 52) - intensity of light emission
+    float ior;              // 4 bytes  (offset 56) - index of refraction (gemstones)
+    int _pad;               // 4 bytes  (offset 60) - pad to 64 bytes (multiple of 16)
 };
-static_assert(sizeof(GPUElementData) == 48, "GPUElementData must be 48 bytes for std430");
+static_assert(sizeof(GPUElementData) == 64, "GPUElementData must be 64 bytes for std430");
 
 class Registry {
 public:

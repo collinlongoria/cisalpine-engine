@@ -320,12 +320,16 @@ void App::renderUI() {
 
     ImGui::ColorEdit3("Background", &settings.backgroundColor.r);
 
-    ImGui::Checkbox("Lava Glow", &settings.glowEnabled);
+    ImGui::Checkbox("Glow", &settings.glowEnabled);
 
     if (settings.glowEnabled) {
-        ImGui::SliderFloat("Intensity", &settings.glowIntensity, 0.1f, 2.0f);
-        ImGui::SliderFloat("Radius", &settings.glowRadius, 2.0f, 20.0f);
+        ImGui::SliderFloat("Glow Radius", &settings.glowRadius, 2.0f, 20.0f);
+        ImGui::SliderFloat("Glow Power", &settings.glowIntensity, 0.1f, 2.0f);
     }
+
+    ImGui::SliderFloat("Ambient", &settings.ambientLight, 0.0f, 1.0f);
+    ImGui::SliderFloat("Specular", &settings.specularStrength, 0.0f, 2.0f);
+    ImGui::SliderInt("Bounces", &settings.lightBounces, 0, 6);
 
     // ACTIONS
     ImGui::Separator();

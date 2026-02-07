@@ -3,18 +3,22 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
-layout(rgba8, binding = 1) uniform writeonly image2D displayOut;
+layout(rgba8,   binding = 1) uniform writeonly image2D colorOut;
+layout(rgba16f, binding = 2) uniform writeonly image2D normalOut;
 
-// The JSON data structure - must match C++ GPUElementData exactly
 struct ElementData {
     vec4 color;
-    int type; // 0:Static, 1:Granular, 2:Liquid, 3:Gas
+    int type;
     float density;
     float viscosity;
     float probability;
     int flammability;
     int glow;
     int maxLife;
+    int gemstone;
+    float lightRadius;
+    float lightIntensity;
+    float ior;
     int _pad;
 };
 
@@ -25,36 +29,168 @@ layout(std430, binding = 2) buffer ElementRegistry {
 uniform vec4 backgroundColor;
 uniform float time;
 
-vec4 getColor(uint element, uint life, ivec2 pos) {
-    // Add slight variation based on position for natural look
-    float variation = fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
+// ─── Helpers ───
 
-    // Empty uses background color
+uvec4 safeLoad(ivec2 pos, ivec2 size) {
+    if (pos.x < 0 || pos.x >= size.x || pos.y < 0 || pos.y >= size.y)
+        return uvec4(0u);
+    return imageLoad(stateIn, pos);
+}
+
+float hashNoise(ivec2 pos) {
+    return fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+float hashNoise2(ivec2 pos) {
+    return fract(sin(dot(vec2(pos), vec2(39.346, 11.135))) * 23421.6312);
+}
+
+// ─── Normal Computation ───
+// Uses a height-field approach: occupied pixels are "raised" based on their
+// density/type. The normal is computed from the gradient of this height field.
+// Different element types produce different normal characteristics.
+
+float getHeight(ivec2 pos, ivec2 size) {
+    uvec4 state = safeLoad(pos, size);
+    uint elem = state.r;
+    if (elem == EMPTY || elem >= MAX_ELEMENTS) return 0.0;
+
+    float baseHeight = 1.0;
+
+    int type = elements[elem].type;
+
+    // Static elements: solid, high relief
+    if (type == 0) baseHeight = 1.0;
+    // Granular: medium, slightly noisy
+    else if (type == 1) baseHeight = 0.8 + hashNoise(pos) * 0.2;
+    // Liquid: very flat/smooth
+    else if (type == 2) baseHeight = 0.3;
+    // Gas: barely any height
+    else if (type == 3) baseHeight = 0.1;
+
+    // Gemstones: faceted height for sparkle
+    if (elements[elem].gemstone == 1) {
+        // Create faceted surface using quantized position noise
+        float facet = floor(hashNoise(pos) * 4.0) / 4.0;
+        baseHeight = 0.7 + facet * 0.3;
+    }
+
+    return baseHeight;
+}
+
+vec3 computeNormal(ivec2 pos, ivec2 size, uint element) {
+    if (element == EMPTY || element >= MAX_ELEMENTS) {
+        return vec3(0.0, 0.0, 1.0); // Flat up-facing normal for empty space
+    }
+
+    int type = elements[element].type;
+
+    // Gemstones: faceted normals that create sparkle/shimmer
+    if (elements[element].gemstone == 1) {
+        // Create distinct facets using a coarse grid
+        // Each facet has its own normal that rotates with time for shimmer
+        float facetSeed = floor(hashNoise(pos) * 6.0); // 6 possible facet orientations
+        float shimmerPhase = time * 2.0 + facetSeed * 1.047; // 60 degree offsets
+
+        // Stronger angular variation for gemstones
+        float nx = sin(shimmerPhase) * 0.4 + (hashNoise(pos) - 0.5) * 0.3;
+        float ny = cos(shimmerPhase * 0.7) * 0.4 + (hashNoise2(pos) - 0.5) * 0.3;
+        float nz = 1.0;
+        return normalize(vec3(nx, ny, nz));
+    }
+
+    // Liquid: very smooth flowing normals
+    if (type == 2) {
+        float wave = sin(time * 2.0 + float(pos.x) * 0.5) * 0.15;
+        float wave2 = cos(time * 1.5 + float(pos.y) * 0.3) * 0.1;
+        return normalize(vec3(wave, wave2, 1.0));
+    }
+
+    // Gas: soft puffy normals
+    if (type == 3) {
+        float puff = sin(float(pos.x) * 0.8 + time) * 0.1;
+        float puff2 = cos(float(pos.y) * 0.6 + time * 0.7) * 0.1;
+        return normalize(vec3(puff, puff2, 1.0));
+    }
+
+    // Standard height-field gradient for solids and granulars
+    float hL = getHeight(pos + ivec2(-1, 0), size);
+    float hR = getHeight(pos + ivec2( 1, 0), size);
+    float hD = getHeight(pos + ivec2(0, -1), size);
+    float hU = getHeight(pos + ivec2(0,  1), size);
+
+    // Sobel-like gradient
+    float dx = hR - hL;
+    float dy = hU - hD;
+
+    // For granular, add subtle per-pixel noise to normals
+    if (type == 1) {
+        dx += (hashNoise(pos) - 0.5) * 0.15;
+        dy += (hashNoise2(pos) - 0.5) * 0.15;
+    }
+
+    return normalize(vec3(-dx, -dy, 0.5));
+}
+
+// ─── Specular Power ───
+// Returns how shiny/specular this element is (stored in normal.w)
+float getSpecularPower(uint element) {
+    if (element == EMPTY || element >= MAX_ELEMENTS) return 0.0;
+
+    // Gemstones: very high specular
+    if (elements[element].gemstone == 1) return 64.0;
+
+    int type = elements[element].type;
+
+    // Liquids: moderately reflective
+    if (type == 2) return 16.0;
+
+    // Obsidian: somewhat reflective
+    if (element == OBSIDIAN) return 24.0;
+
+    // Stone: slight sheen
+    if (element == STONE) return 4.0;
+
+    // Light element: emissive, no specular needed
+    if (element == LIGHT) return 0.0;
+
+    // Default
+    return 1.0;
+}
+
+// ─── Color ───
+
+vec4 getColor(uint element, uint life, ivec2 pos) {
+    float variation = hashNoise(pos);
+
     if (element == EMPTY) {
         return backgroundColor;
     }
 
-    // Bounds check
     if (element >= MAX_ELEMENTS) {
-        return vec4(1.0, 0.0, 1.0, 1.0); // Magenta for undefined
+        return vec4(1.0, 0.0, 1.0, 1.0);
     }
 
     vec4 baseColor = elements[element].color;
-
-    // Add variation to base color
     vec3 varied = baseColor.rgb + (variation - 0.5) * 0.1;
 
-    // Special rendering for specific element types
     int type = elements[element].type;
 
-    // Glowing elements (Lava, etc.) - pulsing effect
-    if (elements[element].glow == 1) {
+    // Glowing elements - pulsing effect
+    if (elements[element].glow == 1 && element != FIRE && element != LIGHT) {
         float pulse = sin(time * 3.0 + variation * 6.28) * 0.5 + 0.5;
         varied.g += pulse * 0.3;
         varied.b += pulse * 0.1;
     }
 
-    // Fire - special flickering based on life
+    // Light element: bright white with subtle warm pulse
+    if (element == LIGHT) {
+        float pulse = sin(time * 1.5 + variation * 3.14) * 0.05 + 0.95;
+        varied = vec3(1.0, 0.98, 0.9) * pulse;
+        return vec4(varied, 1.0);
+    }
+
+    // Fire - flickering based on life
     if (element == FIRE) {
         float flicker = sin(time * 10.0 + variation * 10.0) * 0.5 + 0.5;
         float lifeFactor = float(life) / 255.0;
@@ -62,35 +198,64 @@ vec4 getColor(uint element, uint life, ivec2 pos) {
         return vec4(varied, 0.9 * lifeFactor);
     }
 
-    // Smoke - fade based on life
+    // ═══════════════════════════════════════
+    // SMOKE: color changes with lifetime for visual variety
+    // Fresh smoke (high life): darker, more opaque
+    // Old smoke (low life): lighter, more transparent, slight blue tint
+    // ═══════════════════════════════════════
     if (element == SMOKE) {
-        float density = float(life) / 255.0;
-        return vec4(baseColor.rgb, baseColor.a * density);
+        float lifeFactor = float(life) / 200.0; // normalize to 0..1 range
+        lifeFactor = clamp(lifeFactor, 0.0, 1.0);
+
+        // Fresh smoke: dark gray. Dying smoke: light gray with slight blue
+        vec3 freshColor = vec3(0.3, 0.3, 0.32);
+        vec3 oldColor = vec3(0.6, 0.6, 0.65);
+        vec3 smokeColor = mix(oldColor, freshColor, lifeFactor);
+
+        // Per-pixel color variation
+        smokeColor += (variation - 0.5) * 0.08;
+        float variation2 = hashNoise2(pos);
+        smokeColor.r += (variation2 - 0.5) * 0.05;
+
+        // Opacity: fresh = more opaque, old = fading
+        float alpha = lifeFactor * 0.5 + 0.05;
+
+        return vec4(smokeColor, alpha);
     }
 
-    // Grass - slight color variation based on life (older grass is darker/richer)
+    // Grass color variation based on life
     if (element == GRASS) {
         float lifeFactor = float(life) / 255.0;
-        // Younger grass (lower life from spreading) is lighter/yellower
         varied.r += (1.0 - lifeFactor) * 0.15;
         varied.g -= (1.0 - lifeFactor) * 0.1;
     }
 
-    // Plant (leaves) - subtle wind sway and variation for organic look
+    // Plant leaves - subtle wind sway
     if (element == PLANT) {
         float sway = sin(time * 1.5 + float(pos.x) * 0.3 + float(pos.y) * 0.2) * 0.04;
         varied.g += sway + variation * 0.12;
         varied.r += variation * 0.05;
     }
 
-    // Sapling - pulsing growth indicator while growing
+    // Sapling - pulsing growth indicator
     if (element == SAPLING) {
         float pulse = sin(time * 4.0) * 0.15 + 0.85;
         varied *= pulse;
     }
 
-    // Liquids - slight shimmer
-    if (type == 2) { // Liquid
+    // Gemstones: enhanced color saturation + sparkle
+    if (elements[element].gemstone == 1) {
+        // Boost saturation
+        float lum = dot(varied, vec3(0.299, 0.587, 0.114));
+        varied = mix(vec3(lum), varied, 1.4); // 140% saturation
+
+        // Sparkle highlights based on time
+        float sparkle = pow(max(sin(time * 5.0 + variation * 20.0), 0.0), 8.0);
+        varied += sparkle * 0.3;
+    }
+
+    // Liquid shimmer
+    if (type == 2) {
         float shimmer = sin(time * 2.0 + float(pos.x) * 0.5 + float(pos.y) * 0.3) * 0.05;
         varied += shimmer;
     }
@@ -104,7 +269,15 @@ void main() {
     if (pos.x >= size.x || pos.y >= size.y) return;
 
     uvec4 state = imageLoad(stateIn, pos);
-    vec4 color = getColor(state.r, state.g, pos);
+    uint element = state.r;
+    uint life = state.g;
 
-    imageStore(displayOut, pos, color);
+    // Output color
+    vec4 color = getColor(element, life, pos);
+    imageStore(colorOut, pos, color);
+
+    // Output normal + specular
+    vec3 normal = computeNormal(pos, size, element);
+    float specPower = getSpecularPower(element);
+    imageStore(normalOut, pos, vec4(normal, specPower));
 }

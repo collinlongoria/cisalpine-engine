@@ -32,6 +32,9 @@ struct RenderSettings {
     bool glowEnabled = true;
     float glowIntensity = 0.25f;
     float glowRadius = 3.3f;
+    float ambientLight = 0.15f;
+    float specularStrength = 0.6f;
+    int lightBounces = 3;
 };
 
 class World {
@@ -76,15 +79,19 @@ private:
     GLuint stateTextures[2] = {0, 0};
     int currentBuffer = 0;
 
-    // Rendered world texture
-    GLuint colorTexture = 0;
-    GLuint displayTexture = 0; // w/ lighting
+    // Rendering textures
+    GLuint colorTexture = 0; // Raw element colors (RGBA8)
+    GLuint normalTexture = 0; // Per-pixel normals (RGBA16F: xy=normal, z=height, w=specular)
+    GLuint lightmapTexture = 0; // Accumulated light (RGBA16F: rgb=light color, a=intensity)
+    GLuint lightmapPingPong = 0; // Ping-pong for light propagation
+    GLuint displayTexture = 0; // Final composited output (RGBA8)
 
     // Shaders
     Shader simulationShader;
-    Shader renderShader;
-    Shader lightingShader;
-    Shader quadShader; // for blit to screen
+    Shader renderShader; // Takes sim state and creates color + normals
+    Shader lightingShader; // Light propagation and accumulation
+    Shader compositeShader; // Final composition
+    Shader quadShader; // Blit to screen
 
     // Quad for rendering
     GLuint quadVAO = 0;

@@ -23,6 +23,9 @@ World::World(int width, int height)
 World::~World() {
     if (stateTextures[0]) glDeleteTextures(2, stateTextures);
     if (colorTexture) glDeleteTextures(1, &colorTexture);
+    if (normalTexture) glDeleteTextures(1, &normalTexture);
+    if (lightmapTexture) glDeleteTextures(1, &lightmapTexture);
+    if (lightmapPingPong) glDeleteTextures(1, &lightmapPingPong);
     if (displayTexture) glDeleteTextures(1, &displayTexture);
     if (quadVAO) glDeleteVertexArrays(1, &quadVAO);
     if (quadVBO) glDeleteBuffers(1, &quadVBO);
@@ -40,6 +43,10 @@ bool World::init(const std::string& shaderHeader) {
     }
     if (!lightingShader.loadCompute("shaders/lighting.comp", shaderHeader)) {
         std::cerr << "Failed to load lighting shader" << std::endl;
+        return false;
+    }
+    if (!compositeShader.loadCompute("shaders/composite.comp", shaderHeader)) {
+        std::cerr << "Failed to load composite shader" << std::endl;
         return false;
     }
     if (!quadShader.loadFromFile("shaders/quad.vert", "shaders/quad.frag")) {
@@ -76,6 +83,32 @@ void World::createTextures() {
     glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, worldWidth, worldHeight);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // Create normal texture (RGBA16F: xy = normal, z = height, w = specular power)
+    glGenTextures(1, &normalTexture);
+    glBindTexture(GL_TEXTURE_2D, normalTexture);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, worldWidth, worldHeight);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // Create lightmap textures (RGBA16F: rgb = light color, a = intensity)
+    glGenTextures(1, &lightmapTexture);
+    glBindTexture(GL_TEXTURE_2D, lightmapTexture);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, worldWidth, worldHeight);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    glGenTextures(1, &lightmapPingPong);
+    glBindTexture(GL_TEXTURE_2D, lightmapPingPong);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, worldWidth, worldHeight);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
@@ -170,8 +203,12 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight) 
     GLuint workGroupsY = (worldHeight + 15) / 16;
 
     // Pass 1: Convert state texture to colors
+    // binding 0: stateIn (RGBA8UI, read)
+    // binding 1: colorOut (RGBA8, write)
+    // binding 2: normalOut (RGBA16F, write)
     glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
     glBindImageTexture(1, colorTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glBindImageTexture(2, normalTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
 
     renderShader.use();
     renderShader.setVec4("backgroundColor",
@@ -184,21 +221,61 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight) 
     glDispatchCompute(workGroupsX, workGroupsY, 1);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-    // Pass 2: Apply lighting/glow
-    glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
-    glBindImageTexture(1, colorTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
-    glBindImageTexture(2, displayTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
-
+    // Pass 2: Light Propagation
     lightingShader.use();
     lightingShader.setBool("glowEnabled", renderSettingsData.glowEnabled);
     lightingShader.setFloat("glowIntensity", renderSettingsData.glowIntensity);
     lightingShader.setFloat("glowRadius", renderSettingsData.glowRadius);
     lightingShader.setFloat("time", simulationTime);
+    lightingShader.setFloat("ambientLight", renderSettingsData.ambientLight);
+
+    int bounces = renderSettingsData.lightBounces;
+    for (int bounce = 0; bounce < bounces; bounce++) {
+        // Read from state + normals, ping-pong lightmaps
+        GLuint readLight  = (bounce == 0) ? lightmapTexture : ((bounce % 2 == 0) ? lightmapTexture : lightmapPingPong);
+        GLuint writeLight = (bounce % 2 == 0) ? lightmapPingPong : lightmapTexture;
+
+        // binding 0: stateIn
+        // binding 1: normalIn
+        // binding 3: lightIn (read from previous bounce, or empty on first)
+        // binding 4: lightOut (write)
+        glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
+        glBindImageTexture(1, normalTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
+        glBindImageTexture(3, readLight, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
+        glBindImageTexture(4, writeLight, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+
+        lightingShader.setInt("bouncePass", bounce);
+
+        glDispatchCompute(workGroupsX, workGroupsY, 1);
+        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+    }
+
+    // Determine which lightmap has the final result
+    GLuint finalLightmap = (bounces % 2 == 0) ? lightmapTexture : lightmapPingPong;
+    // If bounces == 0, we never ran the loop, use lightmapTexture as empty fallback
+    if (bounces == 0) finalLightmap = lightmapTexture;
+
+    // Pass 3: Composite
+    // binding 0: stateIn
+    // binding 1: colorIn
+    // binding 2: normalIn
+    // binding 3: lightmapIn
+    // binding 4: displayOut
+    glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
+    glBindImageTexture(1, colorTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
+    glBindImageTexture(2, normalTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
+    glBindImageTexture(3, finalLightmap, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
+    glBindImageTexture(4, displayTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+
+    compositeShader.use();
+    compositeShader.setFloat("ambientLight", renderSettingsData.ambientLight);
+    compositeShader.setFloat("specularStrength", renderSettingsData.specularStrength);
+    compositeShader.setFloat("time", simulationTime);
 
     glDispatchCompute(workGroupsX, workGroupsY, 1);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-    // Pass 3: Draw quad with display texture
+    // Pass 4: Blit display
     glViewport(screenX, screenY, screenWidth, screenHeight);
 
     quadShader.use();

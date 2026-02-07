@@ -47,6 +47,10 @@ void Registry::load(const std::string &filename) {
         d.flammability = 0;
         d.glow = 0;
         d.maxLife = 0;
+        d.gemstone = 0;
+        d.lightRadius = 0.0f;
+        d.lightIntensity = 0.0f;
+        d.ior = 1.0f;
         d._pad = 0;
     }
 
@@ -76,6 +80,10 @@ void Registry::load(const std::string &filename) {
         d.probability = val.value("burnChance", 0.0f);
         d.glow = val.value("glow", false) ? 1 : 0;
         d.maxLife = val.value("life", 0);
+        d.gemstone = val.value("gemstone", false) ? 1 : 0;
+        d.lightRadius = val.value("lightRadius", 0.0f);
+        d.lightIntensity = val.value("lightIntensity", 0.0f);
+        d.ior = val.value("ior", 1.45f); // default IOR for glass-like
         d._pad = 0;
 
         // CPU-only properties

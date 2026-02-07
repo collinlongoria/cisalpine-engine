@@ -2,19 +2,30 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
-layout(rgba8, binding = 1) uniform readonly image2D colorIn;
-layout(rgba8, binding = 2) uniform writeonly image2D displayOut;
+// Bindings:
+// 0: stateIn (RGBA8UI)   - element state
+// 1: normalIn (RGBA16F)  - normals from render pass
+// 3: lightIn (RGBA16F)   - previous bounce light (read)
+// 4: lightOut (RGBA16F)  - current bounce light (write)
+
+layout(rgba8ui, binding = 0) uniform readonly  uimage2D stateIn;
+layout(rgba16f, binding = 1) uniform readonly  image2D  normalIn;
+layout(rgba16f, binding = 3) uniform readonly  image2D  lightIn;
+layout(rgba16f, binding = 4) uniform writeonly image2D  lightOut;
 
 struct ElementData {
     vec4 color;
-    int type; // 0:Static, 1:Granular, 2:Liquid, 3:Gas
+    int type;
     float density;
     float viscosity;
     float probability;
     int flammability;
     int glow;
     int maxLife;
+    int gemstone;
+    float lightRadius;
+    float lightIntensity;
+    float ior;
     int _pad;
 };
 
@@ -26,70 +37,224 @@ uniform bool glowEnabled;
 uniform float glowIntensity;
 uniform float glowRadius;
 uniform float time;
+uniform float ambientLight;
+uniform int bouncePass;
+
+// ─── Helpers ───
+
+bool inBounds(ivec2 pos, ivec2 size) {
+    return pos.x >= 0 && pos.x < size.x && pos.y >= 0 && pos.y < size.y;
+}
+
+float hashNoise(ivec2 pos) {
+    return fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// How much light a material absorbs per pixel traversed
+// 0 = fully transparent, 1 = fully opaque
+float getOpacity(uint elem) {
+    if (elem == EMPTY || elem >= MAX_ELEMENTS) return 0.0;
+
+    int type = elements[elem].type;
+
+    // Gas: mostly transparent
+    if (type == 3) return 0.05;
+
+    // Liquid: semi-transparent
+    if (type == 2) return 0.15;
+
+    // Gemstones: semi-transparent (light passes through with color tinting)
+    if (elements[elem].gemstone == 1) return 0.2;
+
+    // Static/Granular: mostly opaque
+    return 0.85;
+}
+
+// Get the light color tint when passing through a material
+vec3 getMaterialTint(uint elem) {
+    if (elem == EMPTY || elem >= MAX_ELEMENTS) return vec3(1.0);
+
+    // Gemstones tint light with their color (caustics-like effect)
+    if (elements[elem].gemstone == 1) {
+        return elements[elem].color.rgb;
+    }
+
+    // Water tints light blue
+    if (elem == WATER) {
+        return vec3(0.7, 0.8, 1.0);
+    }
+
+    // Lava tints light orange
+    if (elem == LAVA) {
+        return vec3(1.0, 0.6, 0.2);
+    }
+
+    return vec3(1.0);
+}
 
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(stateIn);
 
-    if (pos.x >= size.x || pos.y >= size.y) {
-        return;
-    }
+    if (pos.x >= size.x || pos.y >= size.y) return;
 
-    vec4 baseColor = imageLoad(colorIn, pos);
+    uvec4 state = imageLoad(stateIn, pos);
+    uint elem = state.r;
 
-    if (!glowEnabled) {
-        imageStore(displayOut, pos, baseColor);
-        return;
-    }
+    // ═══════════════════════════════════════
+    // PASS 0: Seed direct light from emitters
+    // ═══════════════════════════════════════
+    if (bouncePass == 0) {
+        vec3 totalLight = vec3(0.0);
 
-    // Accumulate glow from nearby glowing elements
-    vec3 glow = vec3(0.0);
-    int radius = int(glowRadius);
+        if (!glowEnabled) {
+            imageStore(lightOut, pos, vec4(0.0));
+            return;
+        }
 
-    for (int dy = -radius; dy <= radius; dy++) {
-        for (int dx = -radius; dx <= radius; dx++) {
-            ivec2 samplePos = pos + ivec2(dx, dy);
+        // Search radius for light sources
+        int searchRadius = int(max(glowRadius, 20.0));
 
-            if (samplePos.x < 0 || samplePos.x >= size.x ||
-                samplePos.y < 0 || samplePos.y >= size.y) {
-                continue;
-            }
+        for (int dy = -searchRadius; dy <= searchRadius; dy++) {
+            for (int dx = -searchRadius; dx <= searchRadius; dx++) {
+                ivec2 samplePos = pos + ivec2(dx, dy);
+                if (!inBounds(samplePos, size)) continue;
 
-            uvec4 state = imageLoad(stateIn, samplePos);
-            uint elem = state.r;
+                uvec4 sState = imageLoad(stateIn, samplePos);
+                uint sElem = sState.r;
+                if (sElem >= MAX_ELEMENTS) continue;
 
-            // Check if this element glows
-            // Also include Fire which has maxLife > 0 as a special case
-            bool isGlowing = (elem < MAX_ELEMENTS) && (elements[elem].glow == 1 || elem == FIRE);
+                bool isEmitter = false;
+                vec3 lightColor = vec3(0.0);
+                float radius = glowRadius;
+                float intensity = glowIntensity;
 
-            if (isGlowing) {
-                float dist = length(vec2(dx, dy));
-                if (dist <= glowRadius) {
-                    float falloff = 1.0 - (dist / glowRadius);
-                    falloff = falloff * falloff;
-
-                    float variation = fract(sin(dot(vec2(samplePos), vec2(12.9898, 78.233))) * 43758.5453);
-                    float pulse = sin(time * 5.0 + variation * 6.28) * 0.2 + 0.8;
-
-                    // Use the element's color for glow, boosted
-                    vec3 lightColor = elements[elem].color.rgb;
-                    if (elem == FIRE) {
-                        lightColor = vec3(1.0, 0.6, 0.2);
-                    }
-                    else if (elem == LAVA) {
-                        lightColor = vec3(1.0, 0.4, 0.1);
-                    }
-
-                    vec3 glowColor = lightColor * falloff * pulse * glowIntensity;
-                    glow += glowColor;
+                // Light element: strong white light
+                if (sElem == LIGHT) {
+                    isEmitter = true;
+                    lightColor = vec3(1.0, 0.98, 0.9);
+                    radius = elements[sElem].lightRadius;
+                    if (radius <= 0.0) radius = 20.0;
+                    intensity = elements[sElem].lightIntensity;
+                    if (intensity <= 0.0) intensity = 1.5;
                 }
+                // Fire: warm flickering light
+                else if (sElem == FIRE) {
+                    isEmitter = true;
+                    float variation = hashNoise(samplePos);
+                    float flicker = sin(time * 8.0 + variation * 10.0) * 0.3 + 0.7;
+                    float lifeFactor = float(sState.g) / 255.0;
+                    lightColor = vec3(1.0, 0.5, 0.15) * flicker * lifeFactor;
+                    radius = glowRadius * 1.5;
+                    intensity = glowIntensity * 1.2;
+                }
+                // Lava: steady warm glow
+                else if (sElem == LAVA) {
+                    isEmitter = true;
+                    float variation = hashNoise(samplePos);
+                    float pulse = sin(time * 3.0 + variation * 6.28) * 0.15 + 0.85;
+                    lightColor = vec3(1.0, 0.4, 0.1) * pulse;
+                    radius = glowRadius;
+                    intensity = glowIntensity * 0.8;
+                }
+                // Generic glow elements
+                else if (elements[sElem].glow == 1) {
+                    isEmitter = true;
+                    lightColor = elements[sElem].color.rgb;
+                    radius = glowRadius;
+                    intensity = glowIntensity * 0.6;
+                }
+
+                if (!isEmitter) continue;
+
+                float dist = length(vec2(dx, dy));
+                if (dist > radius) continue;
+
+                // ─── Simple ray-march occlusion ───
+                // Step from emitter toward target, accumulate opacity
+                float occlusion = 1.0;
+                vec3 tint = vec3(1.0);
+                int steps = max(int(dist), 1);
+                for (int s = 1; s < steps; s++) {
+                    float t = float(s) / float(steps);
+                    ivec2 rayPos = ivec2(mix(vec2(samplePos), vec2(pos), t));
+                    if (!inBounds(rayPos, size)) continue;
+                    if (rayPos == pos || rayPos == samplePos) continue;
+
+                    uint rayElem = imageLoad(stateIn, rayPos).r;
+                    float opacity = getOpacity(rayElem);
+                    occlusion *= (1.0 - opacity);
+                    tint *= getMaterialTint(rayElem);
+
+                    if (occlusion < 0.01) break; // Early out
+                }
+
+                // Distance falloff: inverse square with smoothing
+                float falloff = 1.0 / (1.0 + dist * dist / (radius * 0.5));
+                // Soft edge
+                float edgeFade = smoothstep(radius, radius * 0.3, dist);
+
+                totalLight += lightColor * intensity * falloff * edgeFade * occlusion * tint;
             }
+        }
+
+        imageStore(lightOut, pos, vec4(totalLight, 1.0));
+        return;
+    }
+
+    // ═══════════════════════════════════════
+    // PASS 1+: Light bounce / propagation
+    // ═══════════════════════════════════════
+    // Read current accumulated light, then gather scattered light from neighbors
+    vec4 currentLight = imageLoad(lightIn, pos);
+    vec3 myLight = currentLight.rgb;
+    vec4 normalData = imageLoad(normalIn, pos);
+    vec3 normal = normalData.xyz;
+
+    // Gather bounced light from 8 neighbors
+    vec3 bounced = vec3(0.0);
+    float totalWeight = 0.0;
+
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            ivec2 np = pos + ivec2(dx, dy);
+            if (!inBounds(np, size)) continue;
+
+            vec4 nLight = imageLoad(lightIn, np);
+            vec3 neighborLight = nLight.rgb;
+
+            if (dot(neighborLight, neighborLight) < 0.001) continue;
+
+            // Direction from neighbor to us
+            vec2 dir = normalize(vec2(dx, dy));
+
+            // Weight by how much the neighbor's surface would scatter toward us
+            // Using the neighbor's normal
+            vec4 nNormal = imageLoad(normalIn, np);
+            vec3 nNorm = nNormal.xyz;
+
+            // Lambert-like bounce: light scatters proportional to alignment
+            float scatter = max(dot(nNorm.xy, -dir) * 0.5 + 0.5, 0.1);
+
+            // Attenuation through material at this pixel
+            float opacity = getOpacity(elem);
+            float transmission = 1.0 - opacity * 0.5; // Half opacity for bounced light
+            vec3 tint = getMaterialTint(elem);
+
+            float weight = scatter * transmission;
+            bounced += neighborLight * weight * tint;
+            totalWeight += weight;
         }
     }
 
-    // Add glow to base color
-    vec3 finalColor = baseColor.rgb + glow;
-    finalColor = min(finalColor, vec3(1.0));  // Clamp to prevent overflow
+    if (totalWeight > 0.0) {
+        bounced /= totalWeight;
+    }
 
-    imageStore(displayOut, pos, vec4(finalColor, baseColor.a));
+    // Bounce attenuation: each bounce reduces intensity
+    float bounceDecay = 0.4;
+    vec3 finalLight = myLight + bounced * bounceDecay;
+
+    imageStore(lightOut, pos, vec4(finalLight, 1.0));
 }
