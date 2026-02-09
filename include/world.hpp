@@ -32,7 +32,7 @@ struct RenderSettings {
     bool glowEnabled = true;
     float glowIntensity = 0.25f;
     float glowRadius = 3.3f;
-    float ambientLight = 0.15f;
+    float ambientLight = 0.65f;
     float specularStrength = 0.6f;
     int lightBounces = 3;
 };
@@ -47,7 +47,8 @@ public:
 
     bool init(const std::string& shaderHeader);
     void update(float dt);
-    void render(int screenX, int screenY, int screenWidth, int screenHeight);
+    void render(int screenX, int screenY, int screenWidth, int screenHeight,
+        float camX, float camY, float camZoom);
 
     void clear();
 

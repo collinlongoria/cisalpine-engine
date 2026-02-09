@@ -13,12 +13,33 @@
 #include "app.hpp"
 
 #include <iostream>
+#include <cmath>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
 
 namespace cisalpine {
+
+void App::scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
+    App* app = static_cast<App*>(glfwGetWindowUserPointer(window));
+    if (app) app->onScroll(yoffset);
+}
+
+void App::onScroll(double yoffset) {
+    // Don't zoom if ImGui wants the mouse
+    ImGuiIO& io = ImGui::GetIO();
+    if (io.WantCaptureMouse) return;
+
+    float zoomFactor = 1.0f + camera.zoomSpeed;
+    if (yoffset > 0) {
+        camera.targetZoom *= zoomFactor;
+    } else if (yoffset < 0) {
+        camera.targetZoom /= zoomFactor;
+    }
+    if (camera.targetZoom < Camera::MIN_ZOOM) camera.targetZoom = Camera::MIN_ZOOM;
+    if (camera.targetZoom > Camera::MAX_ZOOM) camera.targetZoom = Camera::MAX_ZOOM;
+}
 
 void App::init(int worldW, int worldH) {
     worldWidth = worldW;
@@ -45,6 +66,10 @@ void App::init(int worldW, int worldH) {
     }
     glfwMakeContextCurrent(window);
     glfwSwapInterval(1);
+
+    // Set up scroll callback
+    glfwSetWindowUserPointer(window, this);
+    glfwSetScrollCallback(window, scrollCallback);
 
     if (!gladLoadGLLoader((GLADloadproc)glfwGetProcAddress)) {
         glfwDestroyWindow(window);
@@ -81,13 +106,16 @@ void App::init(int worldW, int worldH) {
         throw std::runtime_error("Failed to initialize world");
     }
 
-    // Bind registry SSBO (binding point 2 matches shader layout)
+    // Bind registry SSBO
     registry.bindSSBO(2);
 
-    // Load brush shader with same header for element defines
+    // Load brush shader
     if (!brushShader.loadCompute("shaders/brush.comp", header)) {
         throw std::runtime_error("Failed to load brush shader");
     }
+
+    // Set initial ambient from day mode
+    world->renderSettings().ambientLight = dayAmbient;
 
     lastFrameTime = static_cast<float>(glfwGetTime());
 }
@@ -117,27 +145,71 @@ bool App::screenToWorld(double screenX, double screenY, int& worldX, int& worldY
         screenY < layout.viewportY ||
         screenY >= layout.viewportY + layout.viewportHeight) {
         return false;
-    }
+        }
 
-    // Convert to viewport-local coordinates
+    // Convert to viewport-local coordinates (0..1)
     double localX = screenX - layout.viewportX;
     double localY = screenY - layout.viewportY;
 
     // Flip Y (screen Y is top-down, world Y is bottom-up)
     localY = layout.viewportHeight - localY;
 
-    // Scale to world coordinates
-    worldX = static_cast<int>(localX / pixelScale);
-    worldY = static_cast<int>(localY / pixelScale);
+    // Normalize to 0..1 within viewport
+    double normX = localX / layout.viewportWidth;
+    double normY = localY / layout.viewportHeight;
+
+    // Camera transform: account for zoom and pan
+    // The visible region in world space
+    float visibleW = static_cast<float>(worldWidth) / camera.zoom;
+    float visibleH = static_cast<float>(worldHeight) / camera.zoom;
+
+    // Center of view in world coords
+    float centerX = static_cast<float>(worldWidth) * 0.5f + camera.panX;
+    float centerY = static_cast<float>(worldHeight) * 0.5f + camera.panY;
+
+    // Map normalized viewport coords to world coords
+    worldX = static_cast<int>(centerX - visibleW * 0.5f + normX * visibleW);
+    worldY = static_cast<int>(centerY - visibleH * 0.5f + normY * visibleH);
 
     return (worldX >= 0 && worldX < worldWidth && worldY >= 0 && worldY < worldHeight);
 }
 
-void App::handleInput() {
+void App::handleInput(float dt) {
     ImGuiIO& io = ImGui::GetIO();
 
-    // Don't allow drawing if interacting with imgui
-    if (io.WantCaptureMouse) {
+    // Allow panning even if ImGui has keyboard focus for text input,
+    // but not if settings window is open
+    if (!settingsOpen) {
+        float panAmount = camera.panSpeed * dt / camera.zoom;
+
+        if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS ||
+            glfwGetKey(window, GLFW_KEY_UP) == GLFW_PRESS) {
+            camera.panY += panAmount;
+            }
+        if (glfwGetKey(window, GLFW_KEY_S) == GLFW_PRESS ||
+            glfwGetKey(window, GLFW_KEY_DOWN) == GLFW_PRESS) {
+            camera.panY -= panAmount;
+            }
+        if (glfwGetKey(window, GLFW_KEY_A) == GLFW_PRESS ||
+            glfwGetKey(window, GLFW_KEY_LEFT) == GLFW_PRESS) {
+            camera.panX -= panAmount;
+            }
+        if (glfwGetKey(window, GLFW_KEY_D) == GLFW_PRESS ||
+            glfwGetKey(window, GLFW_KEY_RIGHT) == GLFW_PRESS) {
+            camera.panX += panAmount;
+            }
+    }
+
+    // Smooth zoom interpolation
+    float zoomDiff = camera.targetZoom - camera.zoom;
+    camera.zoom += zoomDiff * 0.15f; // Smooth approach
+    if (std::abs(zoomDiff) < 0.001f) camera.zoom = camera.targetZoom;
+
+    // Clamp pan after zoom change
+    camera.clampPan(worldWidth, worldHeight);
+
+    // Don't allow drawing if interacting with imgui or settings is open
+    if (io.WantCaptureMouse || settingsOpen) {
         isDrawing = false;
         return;
     }
@@ -199,7 +271,121 @@ void App::handleInput() {
     }
 }
 
+void App::renderSettingsWindow() {
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+
+    // Full-screen overlay
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(windowWidth), static_cast<float>(windowHeight)));
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove |
+                              ImGuiWindowFlags_NoResize |
+                              ImGuiWindowFlags_NoCollapse |
+                              ImGuiWindowFlags_NoTitleBar;
+
+    // Semi-transparent background
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.10f, 0.95f));
+    ImGui::Begin("##SettingsOverlay", nullptr, flags);
+    ImGui::PopStyleColor();
+
+    // Center the settings content
+    float contentWidth = 400.0f;
+    float startX = (static_cast<float>(windowWidth) - contentWidth) * 0.5f;
+    float startY = 40.0f;
+
+    ImGui::SetCursorPos(ImVec2(startX, startY));
+    ImGui::BeginChild("SettingsContent", ImVec2(contentWidth, static_cast<float>(windowHeight) - 80.0f));
+
+    ImGui::Text("Settings");
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ─── Simulation ───
+    ImGui::Text("Simulation");
+    ImGui::Spacing();
+
+    SimulationSettings& simSettings = world->simulationSettings();
+    ImGui::SliderInt("Sim Speed", &simSettings.stepsPerFrame, 1, 10);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ─── Rendering ───
+    ImGui::Text("Rendering");
+    ImGui::Spacing();
+
+    RenderSettings& settings = world->renderSettings();
+
+    ImGui::ColorEdit3("Background", &settings.backgroundColor.r);
+
+    ImGui::Spacing();
+
+    ImGui::SliderFloat("Ambient Light", &settings.ambientLight, 0.0f, 1.0f);
+
+    // Update day/night presets if ambient was changed via slider
+    // (so the toggle stays consistent)
+    if (isDayMode && std::abs(settings.ambientLight - dayAmbient) > 0.01f) {
+        dayAmbient = settings.ambientLight;
+    } else if (!isDayMode && std::abs(settings.ambientLight - nightAmbient) > 0.01f) {
+        nightAmbient = settings.ambientLight;
+    }
+
+    ImGui::Spacing();
+
+    ImGui::Checkbox("Glow", &settings.glowEnabled);
+
+    if (settings.glowEnabled) {
+        ImGui::SliderFloat("Glow Radius", &settings.glowRadius, 2.0f, 20.0f);
+        ImGui::SliderFloat("Glow Power", &settings.glowIntensity, 0.1f, 2.0f);
+    }
+
+    ImGui::SliderFloat("Specular", &settings.specularStrength, 0.0f, 2.0f);
+    ImGui::SliderInt("Light Bounces", &settings.lightBounces, 0, 6);
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ─── Camera ───
+    ImGui::Text("Camera");
+    ImGui::Spacing();
+    ImGui::Text("Zoom: %.1fx", camera.zoom);
+    if (ImGui::Button("Reset Camera")) {
+        camera.zoom = 1.0f;
+        camera.targetZoom = 1.0f;
+        camera.panX = 0.0f;
+        camera.panY = 0.0f;
+    }
+
+    ImGui::Spacing();
+    ImGui::Separator();
+    ImGui::Spacing();
+
+    // ─── Close Button ───
+    float buttonWidth = 120.0f;
+    ImGui::SetCursorPosX((contentWidth - buttonWidth) * 0.5f);
+    if (ImGui::Button("Close", ImVec2(buttonWidth, 32.0f))) {
+        settingsOpen = false;
+    }
+
+    // Also close with Escape
+    if (ImGui::IsKeyPressed(ImGuiKey_Escape)) {
+        settingsOpen = false;
+    }
+
+    ImGui::EndChild();
+    ImGui::End();
+}
+
 void App::renderUI() {
+    // If settings window is open, render it instead of sidebar
+    if (settingsOpen) {
+        renderSettingsWindow();
+        return;
+    }
+
     int windowWidth, windowHeight;
     glfwGetWindowSize(window, &windowWidth, &windowHeight);
 
@@ -219,6 +405,7 @@ void App::renderUI() {
 
     ImGui::Text("World: %dx%d", worldWidth, worldHeight);
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+    ImGui::Text("Zoom: %.1fx", camera.zoom);
 
     // ELEMENTS - Data-driven from registry
     ImGui::Separator();
@@ -304,32 +491,57 @@ void App::renderUI() {
     ImGui::SameLine();
     if (ImGui::RadioButton("Star", selectedBrush == BrushShape::Star)) selectedBrush = BrushShape::Star;
 
-    // SIMULATION
+    // DAY / NIGHT TOGGLE
     ImGui::Separator();
-    ImGui::Text("Simulation");
+    ImGui::Text("Lighting");
+    {
+        RenderSettings& settings = world->renderSettings();
 
-    SimulationSettings& simSettings = world->simulationSettings();
+        // Styled toggle buttons
+        float toggleWidth = (availWidth - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
 
-    ImGui::SliderInt("Sim Speed", &simSettings.stepsPerFrame, 1, 10);
+        // Day button
+        if (isDayMode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.75f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+        }
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.8f, 0.4f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.85f, 0.75f, 0.3f, 1.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-    // RENDER
-    ImGui::Separator();
-    ImGui::Text("Rendering");
+        if (ImGui::Button("Day", ImVec2(toggleWidth, 26.0f))) {
+            isDayMode = true;
+            settings.ambientLight = dayAmbient;
+        }
 
-    RenderSettings& settings = world->renderSettings();
+        ImGui::PopStyleVar(1);
+        ImGui::PopStyleColor(4);
 
-    ImGui::ColorEdit3("Background", &settings.backgroundColor.r);
+        ImGui::SameLine();
 
-    ImGui::Checkbox("Glow", &settings.glowEnabled);
+        // Night button
+        if (!isDayMode) {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.35f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 1.0f, 1.0f));
+        } else {
+            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
+            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+        }
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.2f, 0.45f, 1.0f));
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.15f, 0.35f, 1.0f));
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
 
-    if (settings.glowEnabled) {
-        ImGui::SliderFloat("Glow Radius", &settings.glowRadius, 2.0f, 20.0f);
-        ImGui::SliderFloat("Glow Power", &settings.glowIntensity, 0.1f, 2.0f);
+        if (ImGui::Button("Night", ImVec2(toggleWidth, 26.0f))) {
+            isDayMode = false;
+            settings.ambientLight = nightAmbient;
+        }
+
+        ImGui::PopStyleVar(1);
+        ImGui::PopStyleColor(4);
     }
-
-    ImGui::SliderFloat("Ambient", &settings.ambientLight, 0.0f, 1.0f);
-    ImGui::SliderFloat("Specular", &settings.specularStrength, 0.0f, 2.0f);
-    ImGui::SliderInt("Bounces", &settings.lightBounces, 0, 6);
 
     // ACTIONS
     ImGui::Separator();
@@ -337,11 +549,17 @@ void App::renderUI() {
         world->clear();
     }
 
+    if (ImGui::Button("Settings", ImVec2(-1, 0))) {
+        settingsOpen = true;
+    }
+
     // CONTROLS
     ImGui::Separator();
     ImGui::Text("Controls");
     ImGui::BulletText("LMB: Draw");
     ImGui::BulletText("RMB: Erase");
+    ImGui::BulletText("WASD: Pan");
+    ImGui::BulletText("Scroll: Zoom");
 
     ImGui::Separator();
     const char* selectedName = (selectedElementId == 0) ? "Eraser"
@@ -366,10 +584,12 @@ void App::run() {
 
         if (dt > 0.1f) dt = 0.1f;
 
-        handleInput();
+        handleInput(dt);
 
         // Update simulation
-        world->update(dt);
+        if (!settingsOpen) {
+            world->update(dt);
+        }
 
         // Start ImGui frame
         ImGui_ImplOpenGL3_NewFrame();
@@ -387,9 +607,13 @@ void App::run() {
         glClearColor(0.1f, 0.1f, 0.1f, 1.0f);
         glClear(GL_COLOR_BUFFER_BIT);
 
-        // Render world to viewport area
+
+        // Render world to viewport area with camera
+        float camCenterX = static_cast<float>(worldWidth) * 0.5f + camera.panX;
+        float camCenterY = static_cast<float>(worldHeight) * 0.5f + camera.panY;
         world->render(layout.viewportX, layout.viewportY,
-                      layout.viewportWidth, layout.viewportHeight);
+                      layout.viewportWidth, layout.viewportHeight,
+                      camCenterX, camCenterY, camera.zoom);
 
         // Render ImGui on top
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

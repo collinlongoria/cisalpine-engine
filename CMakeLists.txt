@@ -69,7 +69,10 @@ add_custom_target(copy_assets ALL
         COMMAND ${CMAKE_COMMAND} -E copy_directory
         ${CMAKE_SOURCE_DIR}/data
         $<TARGET_FILE_DIR:CisalpineEngine>/data
-        COMMENT "Copying shaders/ and data/ to output directory"
+        COMMAND ${CMAKE_COMMAND} -E copy_directory
+        ${CMAKE_SOURCE_DIR}/assets
+        $<TARGET_FILE_DIR:CisalpineEngine>/assets
+        COMMENT "Copying all assets to output directory"
         VERBATIM
 )
 

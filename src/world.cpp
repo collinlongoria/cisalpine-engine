@@ -198,7 +198,8 @@ void World::update(float dt) {
     }
 }
 
-void World::render(int screenX, int screenY, int screenWidth, int screenHeight) {
+void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
+    float camX, float camY, float camZoom) {
     GLuint workGroupsX = (worldWidth + 15) / 16;
     GLuint workGroupsY = (worldHeight + 15) / 16;
 
@@ -275,13 +276,36 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight) 
     glDispatchCompute(workGroupsX, workGroupsY, 1);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
-    // Pass 4: Blit display
+
+    // Pass 4: Blit display texture to screen with camera transform
+    // Camera defines which portion of the texture to sample
+    float visibleW = static_cast<float>(worldWidth) / camZoom;
+    float visibleH = static_cast<float>(worldHeight) / camZoom;
+
+    // UV bounds in the display texture (0..1 range)
+    float uMin = (camX - visibleW * 0.5f) / static_cast<float>(worldWidth);
+    float uMax = (camX + visibleW * 0.5f) / static_cast<float>(worldWidth);
+    float vMin = (camY - visibleH * 0.5f) / static_cast<float>(worldHeight);
+    float vMax = (camY + visibleH * 0.5f) / static_cast<float>(worldHeight);
+
+    // Clamp to valid range
+    if (uMin < 0.0f) { uMax -= uMin; uMin = 0.0f; }
+    if (uMax > 1.0f) { uMin -= (uMax - 1.0f); uMax = 1.0f; }
+    if (vMin < 0.0f) { vMax -= vMin; vMin = 0.0f; }
+    if (vMax > 1.0f) { vMin -= (vMax - 1.0f); vMax = 1.0f; }
+    uMin = std::max(0.0f, uMin);
+    uMax = std::min(1.0f, uMax);
+    vMin = std::max(0.0f, vMin);
+    vMax = std::min(1.0f, vMax);
     glViewport(screenX, screenY, screenWidth, screenHeight);
 
     quadShader.use();
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, displayTexture);
     quadShader.setInt("displayTex", 0);
+
+    // Pass UV range as uniforms for camera
+    quadShader.setVec4("uvBounds", uMin, vMin, uMax, vMax);
 
     glBindVertexArray(quadVAO);
     glDrawArrays(GL_TRIANGLES, 0, 6);
