@@ -4,6 +4,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8ui, binding = 1) uniform writeonly uimage2D stateOut;
+layout(rgba16f, binding = 3) uniform readonly image2D forceField;
 
 struct ElementData {
     vec4 color;
@@ -34,6 +35,13 @@ const int TYPE_STATIC   = 0;
 const int TYPE_GRANULAR = 1;
 const int TYPE_LIQUID   = 2;
 const int TYPE_GAS      = 3;
+
+// Bomb timing: ticks per sim step. At 60 sim steps/sec * 4 steps/frame,
+// 5 seconds = 300 ticks. We use the G channel (life) as countdown.
+// Bomb is placed with life=0 (unlit). On landing, it gets life=255 and starts
+// counting down via the B channel as a frame-based fuse.
+const uint BOMB_FUSE_TICKS  = 250u; // ~5 seconds at base sim rate
+const float BOMB_DESTROY_RADIUS = 12.0;
 
 // ─── Helpers ───
 
@@ -79,6 +87,11 @@ uvec4 getState(ivec2 pos) {
 uint getElement(ivec2 pos) { return getState(pos).r; }
 uint getLife(ivec2 pos) { return getState(pos).g; }
 
+vec2 getForce(ivec2 pos) {
+    if (!inBounds(pos)) return vec2(0.0);
+    return imageLoad(forceField, pos).rg;
+}
+
 // ─── Type checks ───
 
 bool isStatic(uint id) {
@@ -103,6 +116,7 @@ bool isEmpty(uint id) {
 
 bool isImmobile(uint id) {
     if (id >= MAX_ELEMENTS) return true;
+    // Void and BlackHole are static and immovable
     return elements[id].type == TYPE_STATIC;
 }
 
@@ -118,12 +132,20 @@ bool hasLife(uint id) {
     return id < MAX_ELEMENTS && elements[id].maxLife > 0;
 }
 
+// Is this element indestructible? (Void and BlackHole cannot be destroyed by bombs)
+bool isIndestructible(uint id) {
+    return id == VOID || id == BLACKHOLE;
+}
+
 // ─── Movement Logic ───
 
 bool canDisplace(uint mover, uint target) {
     if (target == EMPTY) return true;
     if (mover == target) return false;
     if (mover >= MAX_ELEMENTS || target >= MAX_ELEMENTS) return false;
+
+    // Nothing can displace Void or BlackHole
+    if (target == VOID || target == BLACKHOLE) return false;
 
     float dMover = elements[mover].density;
     float dTarget = elements[target].density;
@@ -140,8 +162,63 @@ bool canDisplace(uint mover, uint target) {
     return false;
 }
 
+// ─── Force-biased movement ───
+// Returns a destination influenced by the force field at this position.
+// Forces override normal gravity/movement when strong enough.
+
+ivec2 forceBasedDest(ivec2 src, uint elem, vec2 force) {
+    // Convert force to a pixel offset
+    // We use a probabilistic approach: the force magnitude determines the
+    // chance of moving in that direction, and the direction picks the neighbor
+    float forceMag = length(force);
+    if (forceMag < 0.5) return ivec2(-1); // No significant force, return sentinel
+
+    // Normalize direction
+    vec2 dir = force / forceMag;
+
+    // Probability of force-based movement scales with magnitude
+    float moveChance = clamp(forceMag * 0.15, 0.0, 0.95);
+    float roll = float(hash3u(uvec2(src), frameCount * 7u + 31u) & 0xFFFFu) / 65535.0;
+    if (roll > moveChance) return ivec2(-1);
+
+    // Pick the best neighbor in the force direction
+    // Try the primary direction first, then adjacent
+    int bestDx = int(round(dir.x));
+    int bestDy = int(round(dir.y));
+
+    // Clamp to neighbor range
+    bestDx = clamp(bestDx, -1, 1);
+    bestDy = clamp(bestDy, -1, 1);
+
+    if (bestDx == 0 && bestDy == 0) return ivec2(-1);
+
+    ivec2 primary = src + ivec2(bestDx, bestDy);
+    if (inBounds(primary) && canDisplace(elem, getElement(primary))) {
+        return primary;
+    }
+
+    // Try adjacent directions
+    ivec2 alt1 = src + ivec2(bestDx, 0);
+    ivec2 alt2 = src + ivec2(0, bestDy);
+
+    if (bestDx != 0 && inBounds(alt1) && canDisplace(elem, getElement(alt1))) {
+        return alt1;
+    }
+    if (bestDy != 0 && inBounds(alt2) && canDisplace(elem, getElement(alt2))) {
+        return alt2;
+    }
+
+    return ivec2(-1);
+}
+
 ivec2 desiredDest(ivec2 src, uint elem) {
     if (isStatic(elem)) return src;
+
+    // ─── Force field check ───
+    // If there's a significant force here, it can override normal movement
+    vec2 force = getForce(src);
+    ivec2 forceDest = forceBasedDest(src, elem, force);
+    if (forceDest.x >= 0) return forceDest;
 
     int type = elements[elem].type;
     ivec2 down  = src + ivec2(0, -1);
@@ -236,7 +313,7 @@ ivec2 pickWinnerForDest(ivec2 dest) {
     uint bestScore = 0u;
     bool found = false;
 
-    // Check neighbors
+    // Check neighbors — expand to 2-range to allow force-pushed elements
     for (int oy = -1; oy <= 1; ++oy) {
         for (int ox = -1; ox <= 1; ++ox) {
             if (ox == 0 && oy == 0) continue;
@@ -414,6 +491,129 @@ void main() {
     }
 
     // ═══════════════════════════════════════
+    // VOID: Destroy anything touching it
+    // ═══════════════════════════════════════
+    if (elem != VOID && elem != BLACKHOLE && elem != EMPTY) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                uint neighbor = getElement(pos + ivec2(dx, dy));
+                if (neighbor == VOID) {
+                    imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                    return;
+                }
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════
+    // BLACK HOLE: Destroy anything touching it (pulled in by force field)
+    // ═══════════════════════════════════════
+    if (elem != VOID && elem != BLACKHOLE && elem != EMPTY) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                uint neighbor = getElement(pos + ivec2(dx, dy));
+                if (neighbor == BLACKHOLE) {
+                    imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                    return;
+                }
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════
+    // BOMB LOGIC
+    // Bomb uses channels:
+    //   R = BOMB (element id)
+    //   G = fuse timer (counts up from 0 to BOMB_FUSE_TICKS)
+    //   B = 0 normally, 255 = detonation frame flag
+    //   A = 0
+    //
+    // When placed, bomb has life=0. Each sim step increments G.
+    // When G reaches threshold, it detonates:
+    //   - Sets B=255 as signal to force_update shader
+    //   - Destroys elements in close radius
+    //   - Turns itself into Fire
+    // ═══════════════════════════════════════
+    if (elem == BOMB) {
+        uint fuse = cur.g;
+        uint flags = cur.b;
+
+        // If this is the detonation frame (B==255), turn into fire + smoke
+        if (flags == 255u) {
+            // Bomb center becomes fire
+            imageStore(stateOut, pos, uvec4(FIRE, 255u, 0u, 0u));
+            return;
+        }
+
+        // Check if bomb has landed (not falling)
+        ivec2 below = pos + ivec2(0, -1);
+        bool resting = !inBounds(below) || !canDisplace(elem, getElement(below));
+
+        if (resting) {
+            fuse++;
+
+            if (fuse >= BOMB_FUSE_TICKS) {
+                // DETONATE! Set the detonation flag in B channel.
+                // The force_update shader will read this and inject explosion force.
+                // Also destroy nearby elements directly.
+                int destroyR = int(BOMB_DESTROY_RADIUS);
+                // We can't write to other pixels from here (pull-based),
+                // but the detonation flag + force field handles the physics.
+                // The bomb itself becomes fire with detonation flag.
+                imageStore(stateOut, pos, uvec4(BOMB, 0u, 255u, 0u));
+                return;
+            }
+
+            // Ticking bomb: flash color via life channel
+            imageStore(stateOut, pos, uvec4(BOMB, fuse, 0u, 0u));
+            return;
+        }
+
+        // Bomb is still falling, pass through (don't tick fuse while airborne)
+        // Keep current state, movement will handle it below
+    }
+
+    // ═══════════════════════════════════════
+    // BOMB DESTRUCTION CHECK (pull-based)
+    // If a nearby bomb is detonating (B==255), destroy this pixel
+    // ═══════════════════════════════════════
+    if (elem != EMPTY && elem != BOMB && !isIndestructible(elem)) {
+        int destroyR = int(BOMB_DESTROY_RADIUS);
+        for (int dy = -destroyR; dy <= destroyR; dy++) {
+            for (int dx = -destroyR; dx <= destroyR; dx++) {
+                ivec2 sp = pos + ivec2(dx, dy);
+                if (!inBounds(sp)) continue;
+                uvec4 sState = getState(sp);
+                if (sState.r == BOMB && sState.b == 255u) {
+                    float dist = length(vec2(dx, dy));
+                    if (dist <= BOMB_DESTROY_RADIUS) {
+                        // Close to center: destroy. Further out: chance-based
+                        float destroyChance = 1.0 - (dist / BOMB_DESTROY_RADIUS);
+                        destroyChance = destroyChance * destroyChance;
+                        float roll = float(hash3u(uvec2(pos), frameCount + 777u) & 0xFFFFu) / 65535.0;
+                        if (roll < destroyChance) {
+                            // Turn flammable things into fire, others into smoke/empty
+                            if (isFlammable(elem)) {
+                                imageStore(stateOut, pos, uvec4(FIRE, 255u, 0u, 0u));
+                            } else {
+                                // Inner radius: empty. Outer: smoke
+                                if (dist < BOMB_DESTROY_RADIUS * 0.4) {
+                                    imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                                } else {
+                                    imageStore(stateOut, pos, uvec4(SMOKE, 180u, 0u, 0u));
+                                }
+                            }
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // ═══════════════════════════════════════
     // REACTION LOGIC
     // ═══════════════════════════════════════
 
@@ -448,39 +648,33 @@ void main() {
     }
 
     // ═══════════════════════════════════════
-    // SMOKE DECAY (FIX: guaranteed death + color variation via life)
-    // Smoke uses life for opacity/color. Decays with randomness.
-    // When life reaches 0, ALWAYS becomes EMPTY.
+    // SMOKE DECAY
     // ═══════════════════════════════════════
     if (elem == SMOKE) {
         if (life == 0u) {
-            // Dead smoke -> always disappear
             imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
             return;
         }
-        // Variable decay rate: 2-6 per step, ensures smoke always dies
         uint baseDecay = 3u;
-        uint randDecay = hash3u(uvec2(pos), frameCount) % 5u; // 0..4
-        uint totalDecay = baseDecay + randDecay; // 3..7
+        uint randDecay = hash3u(uvec2(pos), frameCount) % 5u;
+        uint totalDecay = baseDecay + randDecay;
 
         if (life <= totalDecay) {
             imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
             return;
         }
         cur.g = life - totalDecay;
-        // Don't return - let smoke continue to movement below
     }
 
     // Generic Life Decay (for non-smoke elements with life: Fire etc.)
-    if (elem != SMOKE && hasLife(elem) && life > 0u) {
+    if (elem != SMOKE && elem != BOMB && hasLife(elem) && life > 0u) {
         uint decayRate = 4u;
         if (life <= decayRate) {
-            // Fire -> Smoke on death. Grass -> Dirt on death.
             uint deathElem;
             uint deathLife;
             if (elem == FIRE) {
                 deathElem = SMOKE;
-                deathLife = 180u + (hash3u(uvec2(pos), frameCount) % 40u); // 180..219 varied
+                deathLife = 180u + (hash3u(uvec2(pos), frameCount) % 40u);
             } else {
                 deathElem = EMPTY;
                 deathLife = 0u;
@@ -492,7 +686,7 @@ void main() {
     }
 
     // ═══════════════════════════════════════
-    // FLAMMABILITY (FIX: Grass burns -> Dirt, not Empty)
+    // FLAMMABILITY
     // ═══════════════════════════════════════
     if (isFlammable(elem)) {
         bool touchingFire = false;
@@ -503,7 +697,6 @@ void main() {
             }
         }
         if (touchingFire && random01(pos) < elements[elem].probability) {
-            // Grass and Dirt-like elements burn back to dirt instead of disappearing
             if (elem == GRASS) {
                 imageStore(stateOut, pos, uvec4(DIRT, 0u, 0u, 0u));
             } else {

@@ -22,6 +22,7 @@ World::World(int width, int height)
 
 World::~World() {
     if (stateTextures[0]) glDeleteTextures(2, stateTextures);
+    if (forceTextures[0]) glDeleteTextures(2, forceTextures);
     if (colorTexture) glDeleteTextures(1, &colorTexture);
     if (normalTexture) glDeleteTextures(1, &normalTexture);
     if (lightmapTexture) glDeleteTextures(1, &lightmapTexture);
@@ -35,6 +36,10 @@ bool World::init(const std::string& shaderHeader) {
     // Load shaders
     if (!simulationShader.loadCompute("shaders/simulation.comp", shaderHeader)) {
         std::cerr << "Failed to load simulation shader" << std::endl;
+        return false;
+    }
+    if (!forceUpdateShader.loadCompute("shaders/physics.comp", shaderHeader)) {
+        std::cerr << "Failed to load physics shader" << std::endl;
         return false;
     }
     if (!renderShader.loadCompute("shaders/render.comp", shaderHeader)) {
@@ -75,6 +80,22 @@ void World::createTextures() {
         std::vector<uint8_t> clearData(worldWidth * worldHeight * 4, 0);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
             GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, clearData.data());
+    }
+
+    // Create force field textures (RGBA16F) - double buffered
+    glGenTextures(2, forceTextures);
+    for (int i = 0; i < 2; i++) {
+        glBindTexture(GL_TEXTURE_2D, forceTextures[i]);
+        glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, worldWidth, worldHeight);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        // Clear to zero force
+        std::vector<float> clearForce(worldWidth * worldHeight * 4, 0.0f);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
+            GL_RGBA, GL_FLOAT, clearForce.data());
     }
 
     // Create color texture (RGBA8)
@@ -159,15 +180,55 @@ void World::clear() {
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
             GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, clearData.data());
     }
+
+    // Also clear force field
+    std::vector<float> clearForce(worldWidth * worldHeight * 4, 0.0f);
+    for (int i = 0; i < 2; i++) {
+        glBindTexture(GL_TEXTURE_2D, forceTextures[i]);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
+            GL_RGBA, GL_FLOAT, clearForce.data());
+    }
+
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+void World::forceUpdateStep() {
+    int nextForceBuffer = 1 - currentForceBuffer;
+
+    // Bind force field textures for read/write
+    // binding 0: forceIn (RGBA16F, read)
+    // binding 1: forceOut (RGBA16F, write)
+    // binding 2: stateIn (RGBA8UI, read) - to detect black holes, bombs, etc.
+    glBindImageTexture(0, forceTextures[currentForceBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
+    glBindImageTexture(1, forceTextures[nextForceBuffer], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+    glBindImageTexture(2, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
+
+    forceUpdateShader.use();
+    forceUpdateShader.setVec2("worldSize", static_cast<float>(worldWidth), static_cast<float>(worldHeight));
+    forceUpdateShader.setFloat("time", simulationTime);
+    forceUpdateShader.setUint("frameCount", frameCount);
+
+    GLuint workGroupsX = (worldWidth + 15) / 16;
+    GLuint workGroupsY = (worldHeight + 15) / 16;
+    glDispatchCompute(workGroupsX, workGroupsY, 1);
+
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+    swapForceBuffers();
+}
+
 void World::simulationStep() {
+    // First: update the force field (reads current state for black holes/bombs)
+    forceUpdateStep();
+
     int nextBuffer = 1 - currentBuffer;
 
     // Bind textures to image units
     glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
     glBindImageTexture(1, stateTextures[nextBuffer], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8UI);
+
+    // Bind force field for the simulation shader to read
+    glBindImageTexture(3, forceTextures[currentForceBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
 
     // Run simulation shader
     simulationShader.use();
@@ -314,6 +375,10 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
 
 void World::swapBuffers() {
     currentBuffer = 1 - currentBuffer;
+}
+
+void World::swapForceBuffers() {
+    currentForceBuffer = 1 - currentForceBuffer;
 }
 
 }

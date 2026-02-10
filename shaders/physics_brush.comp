@@ -1,0 +1,45 @@
+#version 460 core
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16f, binding = 0) uniform image2D forceMap;
+
+uniform int brushX;
+uniform int brushY;
+uniform int brushSize;
+uniform float forceX;  // Wind direction X (from mouse drag delta)
+uniform float forceY;  // Wind direction Y
+uniform float strength; // Wind strength multiplier
+
+void main() {
+    ivec2 size = imageSize(forceMap);
+
+    int dx = int(gl_GlobalInvocationID.x) - brushSize;
+    int dy = int(gl_GlobalInvocationID.y) - brushSize;
+    ivec2 pos = ivec2(brushX + dx, brushY + dy);
+
+    if (abs(dx) > brushSize || abs(dy) > brushSize) return;
+    if (pos.x < 0 || pos.x >= size.x || pos.y < 0 || pos.y >= size.y) return;
+
+    // Circle shape
+    float dist = sqrt(float(dx*dx + dy*dy));
+    if (dist > float(brushSize)) return;
+
+    // Soft falloff from center
+    float falloff = 1.0 - (dist / float(brushSize));
+    falloff = falloff * falloff; // Quadratic falloff for softer edges
+
+    // Read existing force and add wind
+    vec4 existing = imageLoad(forceMap, pos);
+    vec2 windForce = vec2(forceX, forceY) * strength * falloff;
+
+    // Accumulate force (don't replace, add to existing)
+    vec2 newForce = existing.rg + windForce;
+
+    // Clamp to prevent runaway forces
+    float maxForce = 20.0;
+    if (length(newForce) > maxForce) {
+        newForce = normalize(newForce) * maxForce;
+    }
+
+    imageStore(forceMap, pos, vec4(newForce, 0.0, 0.0));
+}

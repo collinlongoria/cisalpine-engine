@@ -162,5 +162,55 @@
     "color": [0.95, 0.7, 0.1, 1.0],
     "density": 14,
     "gemstone": true
+  },
+  "Bomb": {
+    "id": 20,
+    "type": "Granular",
+    "color": [
+      0.2,
+      0.2,
+      0.2,
+      1
+    ],
+    "density": 15,
+    "singleClick": true,
+    "life": 0
+  },
+  "Wind": {
+    "id": 21,
+    "type": "Static",
+    "color": [
+      0.7,
+      0.85,
+      1,
+      0.3
+    ],
+    "density": 0
+  },
+  "Void": {
+    "id": 22,
+    "type": "Static",
+    "color": [
+      0.02,
+      0,
+      0.05,
+      1
+    ],
+    "density": 999
+  },
+  "BlackHole": {
+    "id": 23,
+    "type": "Static",
+    "color": [
+      0,
+      0,
+      0,
+      1
+    ],
+    "density": 999,
+    "singleClick": true,
+    "glow": true,
+    "lightRadius": 12,
+    "lightIntensity": 0.3
   }
 }

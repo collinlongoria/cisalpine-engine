@@ -114,6 +114,11 @@ void App::init(int worldW, int worldH) {
         throw std::runtime_error("Failed to load brush shader");
     }
 
+    // Load wind brush shader
+    if (!physicsBrushShader.loadCompute("shaders/physics_brush.comp", header)) {
+        throw std::runtime_error("Failed to load physics brush shader");
+    }
+
     // Set initial ambient from day mode
     world->renderSettings().ambientLight = dayAmbient;
 
@@ -220,6 +225,58 @@ void App::handleInput(float dt) {
     bool leftPressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_LEFT) == GLFW_PRESS;
     bool rightPressed = glfwGetMouseButton(window, GLFW_MOUSE_BUTTON_RIGHT) == GLFW_PRESS;
 
+    // Check if Wind element is selected
+    int windId = registry.getId("Wind");
+    bool isWindSelected = (selectedElementId == windId && windId >= 0);
+
+    // WIND TOOL
+    if (isWindSelected && leftPressed) {
+        int worldX, worldY;
+        if (screenToWorld(mouseX, mouseY, worldX, worldY)) {
+            if (mouseDragging) {
+                // Calculate drag delta in world space
+                float dx = static_cast<float>(worldX - lastMouseWorldX);
+                float dy = static_cast<float>(worldY - lastMouseWorldY);
+                float dragLen = std::sqrt(dx * dx + dy * dy);
+
+                if (dragLen > 0.5f) {
+                    // Normalize and scale by drag speed
+                    float forceX = dx / dragLen;
+                    float forceY = dy / dragLen;
+                    float strength = std::min(dragLen * 2.0f, 12.0f);
+
+                    // Dispatch wind brush shader
+                    physicsBrushShader.use();
+                    physicsBrushShader.setInt("brushX", worldX);
+                    physicsBrushShader.setInt("brushY", worldY);
+                    physicsBrushShader.setInt("brushSize", brushSize);
+                    physicsBrushShader.setFloat("forceX", forceX);
+                    physicsBrushShader.setFloat("forceY", forceY);
+                    physicsBrushShader.setFloat("strength", strength);
+
+                    // Bind force field for read/write
+                    glBindImageTexture(0, world->getCurrentForceTexture(), 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16F);
+
+                    int groups = (brushSize * 2 + 16) / 16;
+                    physicsBrushShader.dispatch(groups, groups, 1);
+                    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+                }
+            }
+
+            lastMouseWorldX = worldX;
+            lastMouseWorldY = worldY;
+            mouseDragging = true;
+            isDrawing = true;
+        }
+
+        lastMousePressed = leftPressed;
+        return; // Skip normal brush logic when using wind
+    }
+    else {
+        mouseDragging = false;
+    }
+
+    // NORMAL BRUSH LOGIC
     bool shouldDraw = false;
 
     // Data-driven single-click check from registry
@@ -424,7 +481,17 @@ void App::renderUI() {
         glm::vec4 elemColor = registry.getColor(id);
 
         // Display name: "Eraser" for Empty, otherwise use registry name
-        const char* displayName = (id == 0) ? "Eraser" : names[i].c_str();
+        // Special display for Wind
+        const char* displayName;
+        if (id == 0) {
+            displayName = "Eraser";
+        }
+        else if (names[i] == "Wind") {
+            displayName = "Wind";
+        }
+        else {
+            displayName = names[i].c_str();
+        }
 
         // Colored capsule button
         // Background: element color (dimmed if not selected, bright if selected)
@@ -483,6 +550,13 @@ void App::renderUI() {
     // BRUSH
     ImGui::Separator();
     ImGui::Text("Brush");
+
+    // Show hint for wind
+    int windId = registry.getId("Wind");
+    if (selectedElementId == windId && windId >= 0) {
+        ImGui::TextColored(ImVec4(0.7f, 0.85f, 1.0f, 1.0f), "Drag to push!");
+    }
+
     ImGui::SliderInt("Size", &brushSize, 1, 15);
 
     if (ImGui::RadioButton("Circle", selectedBrush == BrushShape::Circle)) selectedBrush = BrushShape::Circle;

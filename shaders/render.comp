@@ -29,7 +29,7 @@ layout(std430, binding = 2) buffer ElementRegistry {
 uniform vec4 backgroundColor;
 uniform float time;
 
-// ─── Helpers ───
+// Helpers
 
 uvec4 safeLoad(ivec2 pos, ivec2 size) {
     if (pos.x < 0 || pos.x >= size.x || pos.y < 0 || pos.y >= size.y)
@@ -45,11 +45,7 @@ float hashNoise2(ivec2 pos) {
     return fract(sin(dot(vec2(pos), vec2(39.346, 11.135))) * 23421.6312);
 }
 
-// ─── Normal Computation ───
-// Uses a height-field approach: occupied pixels are "raised" based on their
-// density/type. The normal is computed from the gradient of this height field.
-// Different element types produce different normal characteristics.
-
+// Normal Computation
 float getHeight(ivec2 pos, ivec2 size) {
     uvec4 state = safeLoad(pos, size);
     uint elem = state.r;
@@ -75,6 +71,12 @@ float getHeight(ivec2 pos, ivec2 size) {
         baseHeight = 0.7 + facet * 0.3;
     }
 
+    // Void: deep depression
+    if (elem == VOID) baseHeight = -0.5;
+
+    // BlackHole: extreme depth
+    if (elem == BLACKHOLE) baseHeight = -1.0;
+
     return baseHeight;
 }
 
@@ -97,6 +99,19 @@ vec3 computeNormal(ivec2 pos, ivec2 size, uint element) {
         float ny = cos(shimmerPhase * 0.7) * 0.4 + (hashNoise2(pos) - 0.5) * 0.3;
         float nz = 1.0;
         return normalize(vec3(nx, ny, nz));
+    }
+
+    // BlackHole: warped normals for gravitational lensing effect
+    if (element == BLACKHOLE) {
+        float angle = time * 3.0 + hashNoise(pos) * 6.28;
+        float warp = 0.6;
+        return normalize(vec3(sin(angle) * warp, cos(angle) * warp, 0.3));
+    }
+
+    // Void: inward-pulling normals
+    if (element == VOID) {
+        float distort = sin(time * 2.0 + hashNoise(pos) * 10.0) * 0.3;
+        return normalize(vec3(distort, distort * 0.5, 0.8));
     }
 
     // Liquid: very smooth flowing normals
@@ -132,7 +147,7 @@ vec3 computeNormal(ivec2 pos, ivec2 size, uint element) {
     return normalize(vec3(-dx, -dy, 0.5));
 }
 
-// ─── Specular Power ───
+// Specular Power
 // Returns how shiny/specular this element is (stored in normal.w)
 float getSpecularPower(uint element) {
     if (element == EMPTY || element >= MAX_ELEMENTS) return 0.0;
@@ -154,11 +169,17 @@ float getSpecularPower(uint element) {
     // Light element: emissive, no specular needed
     if (element == LIGHT) return 0.0;
 
+    // BlackHole: high specular for event horizon shine
+    if (element == BLACKHOLE) return 32.0;
+
+    // Void: slight dark sheen
+    if (element == VOID) return 8.0;
+
     // Default
     return 1.0;
 }
 
-// ─── Color ───
+// Color
 
 vec4 getColor(uint element, uint life, ivec2 pos) {
     float variation = hashNoise(pos);
@@ -176,11 +197,65 @@ vec4 getColor(uint element, uint life, ivec2 pos) {
 
     int type = elements[element].type;
 
+    // BOMB
+    if (element == BOMB) {
+        float fuseProgress = float(life) / 250.0; // 0..1 over fuse duration
+        fuseProgress = clamp(fuseProgress, 0.0, 1.0);
+
+        // Base color: dark gray bomb body
+        vec3 bombColor = vec3(0.2, 0.2, 0.2);
+
+        // Flashing red warning that speeds up as fuse burns
+        float flashRate = 3.0 + fuseProgress * 20.0; // Starts slow, gets frantic
+        float flash = sin(time * flashRate) * 0.5 + 0.5;
+        flash *= fuseProgress; // No flash at start, full flash near end
+
+        // Mix between dark body and bright red warning
+        vec3 warningColor = vec3(1.0, 0.2, 0.0);
+        bombColor = mix(bombColor, warningColor, flash);
+
+        // Add per-pixel noise for texture
+        bombColor += (variation - 0.5) * 0.05;
+
+        return vec4(clamp(bombColor, 0.0, 1.0), 1.0);
+    }
+
+    // VOID
+    if (element == VOID) {
+        float distort = sin(time * 1.5 + variation * 10.0 + float(pos.x) * 0.3) * 0.03;
+        vec3 voidColor = vec3(0.02 + distort, 0.0, 0.05 + distort * 2.0);
+        // Subtle edge shimmer
+        float edgeNoise = hashNoise2(pos);
+        voidColor += vec3(0.03, 0.0, 0.06) * edgeNoise * sin(time * 2.0 + float(pos.y) * 0.5) * 0.5;
+        return vec4(clamp(voidColor, 0.0, 1.0), 1.0);
+    }
+
     // Glowing elements - pulsing effect
     if (elements[element].glow == 1 && element != FIRE && element != LIGHT) {
         float pulse = sin(time * 3.0 + variation * 6.28) * 0.5 + 0.5;
         varied.g += pulse * 0.3;
         varied.b += pulse * 0.1;
+    }
+
+    // BLACK HOLE
+    if (element == BLACKHOLE) {
+        // Core is pure black
+        vec3 holeColor = vec3(0.0);
+
+        // Subtle rotating accretion glow at edges
+        float angle = atan(float(pos.y), float(pos.x)) + time * 2.0;
+        float ring = sin(angle * 3.0 + variation * 6.28) * 0.5 + 0.5;
+
+        // Very faint purple-orange glow
+        vec3 accretionColor = mix(
+            vec3(0.4, 0.1, 0.6),  // Purple
+            vec3(0.8, 0.3, 0.05), // Orange
+            ring
+        );
+
+        holeColor += accretionColor * 0.15 * (sin(time * 4.0 + variation * 3.14) * 0.3 + 0.7);
+
+        return vec4(clamp(holeColor, 0.0, 1.0), 1.0);
     }
 
     // Light element: bright white with subtle warm pulse
@@ -198,11 +273,7 @@ vec4 getColor(uint element, uint life, ivec2 pos) {
         return vec4(varied, 0.9 * lifeFactor);
     }
 
-    // ═══════════════════════════════════════
-    // SMOKE: color changes with lifetime for visual variety
-    // Fresh smoke (high life): darker, more opaque
-    // Old smoke (low life): lighter, more transparent, slight blue tint
-    // ═══════════════════════════════════════
+    // SMOKE: color changes with lifetime
     if (element == SMOKE) {
         float lifeFactor = float(life) / 200.0; // normalize to 0..1 range
         lifeFactor = clamp(lifeFactor, 0.0, 1.0);

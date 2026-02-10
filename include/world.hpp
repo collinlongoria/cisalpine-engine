@@ -59,6 +59,9 @@ public:
     GLuint getCurrentTexture() const { return stateTextures[currentBuffer]; }
     GLuint getDisplayTexture() const { return displayTexture; }
 
+    // Get current force field texture for wind brush
+    GLuint getCurrentForceTexture() const { return forceTextures[currentForceBuffer]; }
+
     RenderSettings& renderSettings() { return renderSettingsData; }
     const RenderSettings& renderSettings() const { return renderSettingsData; }
 
@@ -80,6 +83,11 @@ private:
     GLuint stateTextures[2] = {0, 0};
     int currentBuffer = 0;
 
+    // Double-buffered force field textures (RGBA16F)
+    // RG = force vector (x, y), BA = reserved
+    GLuint forceTextures[2] = {0, 0};
+    int currentForceBuffer = 0;
+
     // Rendering textures
     GLuint colorTexture = 0; // Raw element colors (RGBA8)
     GLuint normalTexture = 0; // Per-pixel normals (RGBA16F: xy=normal, z=height, w=specular)
@@ -89,6 +97,7 @@ private:
 
     // Shaders
     Shader simulationShader;
+    Shader forceUpdateShader; // Force field propagation and decay
     Shader renderShader; // Takes sim state and creates color + normals
     Shader lightingShader; // Light propagation and accumulation
     Shader compositeShader; // Final composition
@@ -106,7 +115,9 @@ private:
     void createTextures();
     void createQuad();
     void swapBuffers();
+    void swapForceBuffers();
     void simulationStep();
+    void forceUpdateStep();
 };
 
 }

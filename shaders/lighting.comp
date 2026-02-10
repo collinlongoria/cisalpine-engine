@@ -2,12 +2,6 @@
 
 layout(local_size_x = 16, local_size_y = 16) in;
 
-// Bindings:
-// 0: stateIn (RGBA8UI)   - element state
-// 1: normalIn (RGBA16F)  - normals from render pass
-// 3: lightIn (RGBA16F)   - previous bounce light (read)
-// 4: lightOut (RGBA16F)  - current bounce light (write)
-
 layout(rgba8ui, binding = 0) uniform readonly  uimage2D stateIn;
 layout(rgba16f, binding = 1) uniform readonly  image2D  normalIn;
 layout(rgba16f, binding = 3) uniform readonly  image2D  lightIn;
@@ -40,7 +34,7 @@ uniform float time;
 uniform float ambientLight;
 uniform int bouncePass;
 
-// ─── Helpers ───
+// Helpers
 
 bool inBounds(ivec2 pos, ivec2 size) {
     return pos.x >= 0 && pos.x < size.x && pos.y >= 0 && pos.y < size.y;
@@ -53,7 +47,13 @@ float hashNoise(ivec2 pos) {
 // How much light a material absorbs per pixel traversed
 // 0 = fully transparent, 1 = fully opaque
 float getOpacity(uint elem) {
-    if (elem == EMPTY || elem >= MAX_ELEMENTS) return 0.0;
+    if (elem == EMPTY || elem >= MAX_ELEMENTS) return 0.0;\
+
+    // BlackHole: absorbs ALL light
+    if (elem == BLACKHOLE) return 1.0;
+
+    // Void: absorbs most light
+    if (elem == VOID) return 0.95;
 
     int type = elements[elem].type;
 
@@ -63,7 +63,7 @@ float getOpacity(uint elem) {
     // Liquid: semi-transparent
     if (type == 2) return 0.15;
 
-    // Gemstones: semi-transparent (light passes through with color tinting)
+    // Gemstones: semi-transparent
     if (elements[elem].gemstone == 1) return 0.2;
 
     // Static/Granular: mostly opaque
@@ -74,7 +74,13 @@ float getOpacity(uint elem) {
 vec3 getMaterialTint(uint elem) {
     if (elem == EMPTY || elem >= MAX_ELEMENTS) return vec3(1.0);
 
-    // Gemstones tint light with their color (caustics-like effect)
+    // BlackHole absorbs everything, no tint
+    if (elem == BLACKHOLE) return vec3(0.0);
+
+    // Void: dark purple tint
+    if (elem == VOID) return vec3(0.1, 0.0, 0.15);
+
+    // Gemstones tint light with their color
     if (elements[elem].gemstone == 1) {
         return elements[elem].color.rgb;
     }
@@ -101,9 +107,7 @@ void main() {
     uvec4 state = imageLoad(stateIn, pos);
     uint elem = state.r;
 
-    // ═══════════════════════════════════════
     // PASS 0: Seed direct light from emitters
-    // ═══════════════════════════════════════
     if (bouncePass == 0) {
         vec3 totalLight = vec3(0.0);
 
@@ -157,6 +161,27 @@ void main() {
                     radius = glowRadius;
                     intensity = glowIntensity * 0.8;
                 }
+                // BlackHole: faint purple-orange accretion glow
+                else if (sElem == BLACKHOLE) {
+                    isEmitter = true;
+                    float variation = hashNoise(samplePos);
+                    float ring = sin(time * 4.0 + variation * 6.28) * 0.5 + 0.5;
+                    lightColor = mix(vec3(0.3, 0.05, 0.5), vec3(0.6, 0.2, 0.05), ring);
+                    radius = elements[sElem].lightRadius;
+                    if (radius <= 0.0) radius = 12.0;
+                    intensity = elements[sElem].lightIntensity;
+                    if (intensity <= 0.0) intensity = 0.3;
+                }
+                // Bomb about to detonate: warning glow
+                else if (sElem == BOMB) {
+                    float fuseProgress = float(sState.g) / 250.0;
+                    if (fuseProgress > 0.5) {
+                        isEmitter = true;
+                        lightColor = vec3(1.0, 0.2, 0.0) * fuseProgress;
+                        radius = glowRadius * fuseProgress;
+                        intensity = glowIntensity * fuseProgress * 0.8;
+                    }
+                }
                 // Generic glow elements
                 else if (elements[sElem].glow == 1) {
                     isEmitter = true;
@@ -170,7 +195,7 @@ void main() {
                 float dist = length(vec2(dx, dy));
                 if (dist > radius) continue;
 
-                // ─── Simple ray-march occlusion ───
+                // Simple ray-march occlusion
                 // Step from emitter toward target, accumulate opacity
                 float occlusion = 1.0;
                 vec3 tint = vec3(1.0);
@@ -186,7 +211,7 @@ void main() {
                     occlusion *= (1.0 - opacity);
                     tint *= getMaterialTint(rayElem);
 
-                    if (occlusion < 0.01) break; // Early out
+                    if (occlusion < 0.01) break;
                 }
 
                 // Distance falloff: inverse square with smoothing
@@ -202,9 +227,7 @@ void main() {
         return;
     }
 
-    // ═══════════════════════════════════════
     // PASS 1+: Light bounce / propagation
-    // ═══════════════════════════════════════
     // Read current accumulated light, then gather scattered light from neighbors
     vec4 currentLight = imageLoad(lightIn, pos);
     vec3 myLight = currentLight.rgb;

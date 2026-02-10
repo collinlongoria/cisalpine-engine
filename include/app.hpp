@@ -93,6 +93,12 @@ private:
     BrushShape selectedBrush = BrushShape::Circle;
     int brushSize = 3;
 
+
+    // Mouse drag state
+    bool mouseDragging = false;
+    int lastMouseWorldX = 0;
+    int lastMouseWorldY = 0;
+
     // UI State
     bool settingsOpen = false;
     bool isDayMode = true;
@@ -102,6 +108,7 @@ private:
     // Logic
     Registry registry;
     Shader brushShader;
+    Shader physicsBrushShader;
 
     void calculateWindowSize(int& windowWidth, int& windowHeight);
     void updateLayout(int windowWidth, int windowHeight);

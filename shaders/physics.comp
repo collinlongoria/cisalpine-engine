@@ -1,0 +1,162 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+// Force field: RG = force vector (x, y), BA = metadata (magnitude hint, age/flags)
+layout(rgba16f, binding = 0) uniform readonly  image2D forceIn;
+layout(rgba16f, binding = 1) uniform writeonly image2D forceOut;
+layout(rgba8ui, binding = 2) uniform readonly  uimage2D stateIn;
+
+struct ElementData {
+    vec4 color;
+    int type;
+    float density;
+    float viscosity;
+    float probability;
+    int flammability;
+    int glow;
+    int maxLife;
+    int gemstone;
+    float lightRadius;
+    float lightIntensity;
+    float ior;
+    int _pad;
+};
+
+layout(std430, binding = 2) buffer ElementRegistry {
+    ElementData elements[];
+};
+
+uniform vec2  worldSize;
+uniform float time;
+uniform uint  frameCount;
+
+const float FORCE_DECAY     = 0.82;   // How quickly forces fade per step
+const float FORCE_SPREAD    = 0.15;   // How much force spreads to neighbors
+const float BLACK_HOLE_PULL = 8.0;    // Attraction strength
+const float BLACK_HOLE_RANGE = 30.0;  // Attraction radius in pixels
+const float BOMB_FORCE      = 15.0;   // Explosion impulse strength
+const float BOMB_RADIUS     = 20.0;   // Explosion radius
+
+bool inBounds(ivec2 p) {
+    return (p.x >= 0 && p.x < int(worldSize.x) &&
+            p.y >= 0 && p.y < int(worldSize.y));
+}
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (!inBounds(pos)) return;
+
+    vec4 curForce = imageLoad(forceIn, pos);
+    vec2 force = curForce.rg;
+
+    uvec4 state = imageLoad(stateIn, pos);
+    uint elem = state.r;
+
+    // ═══════════════════════════════════════
+    // 1. Decay existing forces
+    // ═══════════════════════════════════════
+    force *= FORCE_DECAY;
+
+    // Kill very small forces to avoid float dust
+    if (length(force) < 0.01) force = vec2(0.0);
+
+    // ═══════════════════════════════════════
+    // 2. Spread forces from neighbors (diffusion)
+    //    This makes explosions create a shockwave
+    // ═══════════════════════════════════════
+    vec2 neighborForce = vec2(0.0);
+    float totalWeight = 0.0;
+
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            ivec2 np = pos + ivec2(dx, dy);
+            if (!inBounds(np)) continue;
+
+            vec4 nf = imageLoad(forceIn, np);
+            float w = (abs(dx) + abs(dy) == 1) ? 1.0 : 0.707; // Cardinal vs diagonal
+            neighborForce += nf.rg * w;
+            totalWeight += w;
+        }
+    }
+
+    if (totalWeight > 0.0) {
+        neighborForce /= totalWeight;
+        // Blend: keep most of our own force, add a bit of neighbor average
+        force = mix(force, neighborForce, FORCE_SPREAD);
+    }
+
+    // ═══════════════════════════════════════
+    // 3. Black Hole attraction field
+    //    Search nearby for black holes, accumulate pull toward them
+    // ═══════════════════════════════════════
+    int bhRange = int(BLACK_HOLE_RANGE);
+    for (int dy = -bhRange; dy <= bhRange; dy++) {
+        for (int dx = -bhRange; dx <= bhRange; dx++) {
+            ivec2 sp = pos + ivec2(dx, dy);
+            if (!inBounds(sp)) continue;
+
+            uint sElem = imageLoad(stateIn, sp).r;
+            if (sElem != BLACKHOLE) continue;
+
+            vec2 toHole = vec2(sp - pos);
+            float dist = length(toHole);
+            if (dist < 1.0 || dist > BLACK_HOLE_RANGE) continue;
+
+            // Inverse-square pull
+            vec2 dir = normalize(toHole);
+            float strength = BLACK_HOLE_PULL / (dist * dist) * BLACK_HOLE_RANGE;
+            force += dir * strength;
+        }
+    }
+
+    // ═══════════════════════════════════════
+    // 4. Bomb explosion injection
+    //    Bombs that just detonated (elem == BOMB, life == 1 means about to blow)
+    //    We detect the explosion frame: state.b channel == 255 means "detonating now"
+    //    The simulation shader sets this flag on the explosion frame
+    // ═══════════════════════════════════════
+    int bombRange = int(BOMB_RADIUS);
+    for (int dy = -bombRange; dy <= bombRange; dy++) {
+        for (int dx = -bombRange; dx <= bombRange; dx++) {
+            ivec2 sp = pos + ivec2(dx, dy);
+            if (!inBounds(sp)) continue;
+
+            uvec4 sState = imageLoad(stateIn, sp);
+            // Check for detonation flag: element is BOMB and B channel == 255
+            if (sState.r != BOMB) continue;
+            if (sState.b != 255u) continue;
+
+            vec2 awayFromBomb = vec2(pos - sp);
+            float dist = length(awayFromBomb);
+            if (dist < 0.5) continue; // Don't apply to self
+            if (dist > BOMB_RADIUS) continue;
+
+            vec2 dir = normalize(awayFromBomb);
+            // Force falls off with distance from bomb center
+            float falloff = 1.0 - (dist / BOMB_RADIUS);
+            falloff = falloff * falloff; // Quadratic falloff
+            force += dir * BOMB_FORCE * falloff;
+        }
+    }
+
+    // ═══════════════════════════════════════
+    // 5. Static elements block force (walls absorb forces)
+    // ═══════════════════════════════════════
+    if (elem < MAX_ELEMENTS && elem != EMPTY) {
+        int type = elements[elem].type;
+        // Static elements (except Void/BlackHole) absorb force
+        if (type == 0 && elem != VOID && elem != BLACKHOLE) {
+            force *= 0.1; // Walls mostly absorb force
+        }
+    }
+
+    // Clamp max force to prevent instability
+    float maxForce = 20.0;
+    if (length(force) > maxForce) {
+        force = normalize(force) * maxForce;
+    }
+
+    imageStore(forceOut, pos, vec4(force, 0.0, 0.0));
+}
