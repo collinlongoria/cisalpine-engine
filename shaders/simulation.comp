@@ -92,6 +92,18 @@ vec2 getForce(ivec2 pos) {
     return imageLoad(forceField, pos).rg;
 }
 
+bool isDoomed(ivec2 pos) {
+    // Check surroundings for Void or BlackHole
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            uint neighbor = getElement(pos + ivec2(dx, dy));
+            if (neighbor == VOID || neighbor == BLACKHOLE) return true;
+        }
+    }
+    return false;
+}
+
 // ─── Type checks ───
 
 bool isStatic(uint id) {
@@ -302,6 +314,11 @@ ivec2 desiredDest(ivec2 src, uint elem) {
 
 bool sourceProposesTo(ivec2 src, ivec2 dest) {
     if (!inBounds(src)) return false;
+
+    // If the source is about to be destroyed by a Black Hole,
+    // it cannot propose movement. It must stay and die.
+    if (isDoomed(src)) return false;
+
     uint e = getElement(src);
     if (e == EMPTY || isImmobile(e)) return false;
     ivec2 d = desiredDest(src, e);
@@ -480,6 +497,16 @@ void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     if (!inBounds(pos)) return;
 
+    // 1. Check if anything is moving into us.
+    // If we are the destination for a move, that takes priority over everything else.
+    ivec2 winner = pickWinnerForDest(pos);
+    if (winner.x != 999999) {
+        uvec4 winState = getState(winner);
+        imageStore(stateOut, pos, winState);
+        return; // We have been overwritten. Stop.
+    }
+
+    // 2. Load current state only if we weren't overwritten
     uvec4 cur = getState(pos);
     uint elem = cur.r;
     uint life = cur.g;
@@ -812,14 +839,6 @@ void main() {
     // ═══════════════════════════════════════
     // MOVEMENT
     // ═══════════════════════════════════════
-
-    // If someone wins moving into us, we get overwritten
-    ivec2 winner = pickWinnerForDest(pos);
-    if (winner.x != 999999) {
-        uvec4 winState = getState(winner);
-        imageStore(stateOut, pos, winState);
-        return;
-    }
 
     // Otherwise, try to move
     if (!isEmpty(elem) && !isImmobile(elem)) {
