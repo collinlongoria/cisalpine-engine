@@ -119,9 +119,6 @@ void App::init(int worldW, int worldH) {
         throw std::runtime_error("Failed to load physics brush shader");
     }
 
-    // Set initial ambient from day mode
-    world->renderSettings().ambientLight = dayAmbient;
-
     lastFrameTime = static_cast<float>(glfwGetTime());
 }
 
@@ -256,6 +253,8 @@ void App::handleInput(float dt) {
 
                     // Bind force field for read/write
                     glBindImageTexture(0, world->getCurrentForceTexture(), 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA16F);
+                    // Bind state texture so physics brush can read element types
+                    glBindImageTexture(1, world->getCurrentTexture(), 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
 
                     int groups = (brushSize * 2 + 16) / 16;
                     physicsBrushShader.dispatch(groups, groups, 1);
@@ -379,14 +378,23 @@ void App::renderSettingsWindow() {
 
     ImGui::Spacing();
 
-    ImGui::SliderFloat("Ambient Light", &settings.ambientLight, 0.0f, 1.0f);
+    ImGui::Checkbox("Sky Gradient", &settings.skyEnabled);
+    if (settings.skyEnabled) {
+        ImGui::SliderFloat("Time of Day", &settings.timeOfDay, 0.0f, 1.0f);
+        ImGui::Checkbox("Show Sun", &settings.showSun);
 
-    // Update day/night presets if ambient was changed via slider
-    // (so the toggle stays consistent)
-    if (isDayMode && std::abs(settings.ambientLight - dayAmbient) > 0.01f) {
-        dayAmbient = settings.ambientLight;
-    } else if (!isDayMode && std::abs(settings.ambientLight - nightAmbient) > 0.01f) {
-        nightAmbient = settings.ambientLight;
+        // Show derived ambient (read-only info)
+        ImGui::Text("Ambient: %.2f (auto)", settings.ambientLight);
+    } else {
+        ImGui::SliderFloat("Ambient Light", &settings.ambientLight, 0.0f, 1.0f);
+    }
+
+    // Update day/night presets based on sky time
+    if (settings.skyEnabled) {
+        float sunAngle = settings.timeOfDay * 3.14159f;
+        float dayFactor = sin(sunAngle);
+        dayFactor = fmax(dayFactor, 0.0f);
+        settings.ambientLight = 0.05f + dayFactor * 0.7f;
     }
 
     ImGui::Spacing();
@@ -565,56 +573,40 @@ void App::renderUI() {
     ImGui::SameLine();
     if (ImGui::RadioButton("Star", selectedBrush == BrushShape::Star)) selectedBrush = BrushShape::Star;
 
-    // DAY / NIGHT TOGGLE
+    // SKY / LIGHTING
     ImGui::Separator();
     ImGui::Text("Lighting");
     {
         RenderSettings& settings = world->renderSettings();
 
-        // Styled toggle buttons
-        float toggleWidth = (availWidth - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        // Sky toggle
+        ImGui::Checkbox("Sky", &settings.skyEnabled);
 
-        // Day button
-        if (isDayMode) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.85f, 0.75f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.0f, 0.0f, 0.0f, 1.0f));
+        if (settings.skyEnabled) {
+            // Time of day slider
+            // Show label based on time
+            const char* timeLabel;
+            float t = settings.timeOfDay;
+            if (t < 0.15f || t > 0.88f) timeLabel = "Night";
+            else if (t < 0.3f) timeLabel = "Dawn";
+            else if (t < 0.42f) timeLabel = "Morning";
+            else if (t < 0.58f) timeLabel = "Noon";
+            else if (t < 0.7f) timeLabel = "Afternoon";
+            else if (t < 0.8f) timeLabel = "Dusk";
+            else timeLabel = "Twilight";
+
+            ImGui::SliderFloat("Time", &settings.timeOfDay, 0.0f, 1.0f, timeLabel);
+
+            // Derive ambient from time of day automatically
+            float sunAngle = settings.timeOfDay * 3.14159f; // 0 to PI over 0..1
+            float dayFactor = sin(sunAngle);
+            dayFactor = fmax(dayFactor, 0.0f);
+            settings.ambientLight = 0.05f + dayFactor * 0.7f;
+
+            ImGui::Checkbox("Show Sun", &settings.showSun);
         } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
+            ImGui::SliderFloat("Ambient", &settings.ambientLight, 0.0f, 1.0f);
         }
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.9f, 0.8f, 0.4f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.85f, 0.75f, 0.3f, 1.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-
-        if (ImGui::Button("Day", ImVec2(toggleWidth, 26.0f))) {
-            isDayMode = true;
-            settings.ambientLight = dayAmbient;
-        }
-
-        ImGui::PopStyleVar(1);
-        ImGui::PopStyleColor(4);
-
-        ImGui::SameLine();
-
-        // Night button
-        if (!isDayMode) {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.15f, 0.15f, 0.35f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.8f, 0.8f, 1.0f, 1.0f));
-        } else {
-            ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.3f, 0.3f, 1.0f));
-            ImGui::PushStyleColor(ImGuiCol_Text, ImVec4(0.7f, 0.7f, 0.7f, 1.0f));
-        }
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.2f, 0.2f, 0.45f, 1.0f));
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, ImVec4(0.15f, 0.15f, 0.35f, 1.0f));
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 8.0f);
-
-        if (ImGui::Button("Night", ImVec2(toggleWidth, 26.0f))) {
-            isDayMode = false;
-            settings.ambientLight = nightAmbient;
-        }
-
-        ImGui::PopStyleVar(1);
-        ImGui::PopStyleColor(4);
     }
 
     // ACTIONS

@@ -132,14 +132,19 @@ bool Shader::loadCompute(std::string_view computePath, const std::string& header
     }
 
     // Inject header after version string
+    auto insertHeaderAfterLine = [&](size_t startPos) {
+        size_t lineEnd = source.find('\n', startPos);
+        if (lineEnd == std::string::npos) {
+            source += "\n" + header + "\n";
+        } else {
+            source.insert(lineEnd + 1, header + "\n");
+        }
+    };
+
+
     size_t versionPos = source.find("#version");
-    if (versionPos != std::string::npos) {
-        size_t nextLine = source.find('\n', versionPos);
-        source.insert(nextLine + 1, header + "\n");
-    }
-    else {
-        source = header + "\n" + source;
-    }
+    if (versionPos != std::string::npos) insertHeaderAfterLine(versionPos);
+    else source = header + "\n" + source;
 
     GLuint computeShader = compileShader(GL_COMPUTE_SHADER, source, computePath);
     if (computeShader == 0) return false;
@@ -155,7 +160,6 @@ bool Shader::loadCompute(std::string_view computePath, const std::string& header
         programId = 0;
         return false;
     }
-
     return true;
 }
 
@@ -169,27 +173,27 @@ void Shader::dispatch(GLuint x, GLuint y, GLuint z) const {
 }
 
 void Shader::setBool(std::string_view name, bool value) const {
-    glUniform1i(glGetUniformLocation(programId, name.data()), static_cast<int>(value));
+    glUniform1i(uniformLoc(programId, name), static_cast<bool>(value));
 }
 
 void Shader::setInt(std::string_view name, int value) const {
-    glUniform1i(glGetUniformLocation(programId, name.data()), value);
+    glUniform1i(uniformLoc(programId, name), value);
 }
 
 void Shader::setUint(std::string_view name, uint32_t value) const {
-    glUniform1ui(glGetUniformLocation(programId, name.data()), value);
+    glUniform1ui(uniformLoc(programId, name), value);
 }
 
 void Shader::setFloat(std::string_view name, float value) const {
-    glUniform1f(glGetUniformLocation(programId, name.data()), value);
+    glUniform1f(uniformLoc(programId, name), value);
 }
 
 void Shader::setVec2(std::string_view name, float x, float y) const {
-    glUniform2f(glGetUniformLocation(programId, name.data()), x, y);
+    glUniform2f(uniformLoc(programId, name), x,y);
 }
 
 void Shader::setVec4(std::string_view name, float x, float y, float z, float w) const {
-    glUniform4f(glGetUniformLocation(programId, name.data()), x, y, z, w);
+    glUniform4f(uniformLoc(programId, name), x, y, z, w);
 }
 
 }

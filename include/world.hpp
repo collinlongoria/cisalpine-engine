@@ -35,6 +35,11 @@ struct RenderSettings {
     float ambientLight = 0.65f;
     float specularStrength = 0.6f;
     int lightBounces = 3;
+
+    // Sky system
+    bool skyEnabled = true;
+    float timeOfDay = 0.35f;  // 0.0 = midnight, 0.25 = sunrise, 0.5 = noon, 0.75 = sunset
+    bool showSun = true;
 };
 
 class World {
@@ -94,6 +99,7 @@ private:
     GLuint lightmapTexture = 0; // Accumulated light (RGBA16F: rgb=light color, a=intensity)
     GLuint lightmapPingPong = 0; // Ping-pong for light propagation
     GLuint displayTexture = 0; // Final composited output (RGBA8)
+    GLuint skyTexture = 0; // Sky gradient background (RGBA8)
 
     // Shaders
     Shader simulationShader;

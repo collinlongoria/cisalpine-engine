@@ -32,7 +32,7 @@ uniform float time;
 uniform uint  frameCount;
 
 const float FORCE_DECAY     = 0.82;   // How quickly forces fade per step
-const float FORCE_SPREAD    = 0.15;   // How much force spreads to neighbors
+const float FORCE_SPREAD    = 0.20;   // How much force spreads to neighbors
 const float BLACK_HOLE_PULL = 8.0;    // Attraction strength
 const float BLACK_HOLE_RANGE = 30.0;  // Attraction radius in pixels
 const float BOMB_FORCE      = 15.0;   // Explosion impulse strength
@@ -53,18 +53,13 @@ void main() {
     uvec4 state = imageLoad(stateIn, pos);
     uint elem = state.r;
 
-    // ═══════════════════════════════════════
-    // 1. Decay existing forces
-    // ═══════════════════════════════════════
+    // Decay existing forces
     force *= FORCE_DECAY;
 
-    // Kill very small forces to avoid float dust
+    // Kill very small forces
     if (length(force) < 0.01) force = vec2(0.0);
 
-    // ═══════════════════════════════════════
-    // 2. Spread forces from neighbors (diffusion)
-    //    This makes explosions create a shockwave
-    // ═══════════════════════════════════════
+    // Spread forces from neighbors
     vec2 neighborForce = vec2(0.0);
     float totalWeight = 0.0;
 
@@ -87,10 +82,7 @@ void main() {
         force = mix(force, neighborForce, FORCE_SPREAD);
     }
 
-    // ═══════════════════════════════════════
-    // 3. Black Hole attraction field
-    //    Search nearby for black holes, accumulate pull toward them
-    // ═══════════════════════════════════════
+    // Black Hole attraction field
     int bhRange = int(BLACK_HOLE_RANGE);
     for (int dy = -bhRange; dy <= bhRange; dy++) {
         for (int dx = -bhRange; dx <= bhRange; dx++) {
@@ -111,12 +103,7 @@ void main() {
         }
     }
 
-    // ═══════════════════════════════════════
-    // 4. Bomb explosion injection
-    //    Bombs that just detonated (elem == BOMB, life == 1 means about to blow)
-    //    We detect the explosion frame: state.b channel == 255 means "detonating now"
-    //    The simulation shader sets this flag on the explosion frame
-    // ═══════════════════════════════════════
+    // Bomb explosion injection
     int bombRange = int(BOMB_RADIUS);
     for (int dy = -bombRange; dy <= bombRange; dy++) {
         for (int dx = -bombRange; dx <= bombRange; dx++) {
@@ -141,14 +128,12 @@ void main() {
         }
     }
 
-    // ═══════════════════════════════════════
-    // 5. Static elements block force (walls absorb forces)
-    // ═══════════════════════════════════════
+    // Static elements partially absorb force
     if (elem < MAX_ELEMENTS && elem != EMPTY) {
         int type = elements[elem].type;
-        // Static elements (except Void/BlackHole) absorb force
+        // Static elements absorb some force but not all
         if (type == 0 && elem != VOID && elem != BLACKHOLE) {
-            force *= 0.1; // Walls mostly absorb force
+            force *= 0.4;
         }
     }
 

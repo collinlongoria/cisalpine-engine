@@ -5,6 +5,7 @@ layout(local_size_x = 16, local_size_y = 16) in;
 layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8,   binding = 1) uniform writeonly image2D colorOut;
 layout(rgba16f, binding = 2) uniform writeonly image2D normalOut;
+layout(rgba8,   binding = 5) uniform writeonly image2D skyOut;
 
 struct ElementData {
     vec4 color;
@@ -28,6 +29,9 @@ layout(std430, binding = 2) buffer ElementRegistry {
 
 uniform vec4 backgroundColor;
 uniform float time;
+uniform bool skyEnabled;
+uniform float timeOfDay;
+uniform bool showSun;
 
 // Helpers
 
@@ -43,6 +47,138 @@ float hashNoise(ivec2 pos) {
 
 float hashNoise2(ivec2 pos) {
     return fract(sin(dot(vec2(pos), vec2(39.346, 11.135))) * 23421.6312);
+}
+
+// Sky Gradient
+vec3 skyColor(float normalizedY, float tod, ivec2 pos, ivec2 size) {
+    float sunElevation = sin(tod * 3.14159);
+
+    // Night sky
+    vec3 nightTop    = vec3(0.01, 0.01, 0.04);
+    vec3 nightBottom = vec3(0.03, 0.03, 0.08);
+
+    // Dawn/dusk sky
+    vec3 dawnTop     = vec3(0.15, 0.15, 0.35);
+    vec3 dawnBottom  = vec3(0.85, 0.45, 0.20);
+
+    // Day sky
+    vec3 dayTop      = vec3(0.25, 0.50, 0.92);
+    vec3 dayBottom   = vec3(0.55, 0.75, 0.95);
+
+    // Noon sky
+    vec3 noonTop     = vec3(0.30, 0.55, 0.95);
+    vec3 noonBottom  = vec3(0.65, 0.82, 0.98);
+
+    // Sunset
+    vec3 sunsetTop   = vec3(0.20, 0.15, 0.40);
+    vec3 sunsetBottom= vec3(0.95, 0.40, 0.15);
+
+    // Blend based on time of day
+    vec3 topColor, bottomColor;
+
+    if (tod < 0.15) {
+        // Night to pre-dawn
+        float t = tod / 0.15;
+        topColor    = mix(nightTop, dawnTop, t * t);
+        bottomColor = mix(nightBottom, dawnBottom, t * t);
+    }
+    else if (tod < 0.30) {
+        // Dawn to morning
+        float t = (tod - 0.15) / 0.15;
+        topColor    = mix(dawnTop, dayTop, t);
+        bottomColor = mix(dawnBottom, dayBottom, t);
+    }
+    else if (tod < 0.50) {
+        // Morning to noon
+        float t = (tod - 0.30) / 0.20;
+        topColor    = mix(dayTop, noonTop, t);
+        bottomColor = mix(dayBottom, noonBottom, t);
+    }
+    else if (tod < 0.70) {
+        // Noon to afternoon
+        float t = (tod - 0.50) / 0.20;
+        topColor    = mix(noonTop, dayTop, t);
+        bottomColor = mix(noonBottom, dayBottom, t);
+    }
+    else if (tod < 0.80) {
+        // Afternoon to sunset
+        float t = (tod - 0.70) / 0.10;
+        topColor    = mix(dayTop, sunsetTop, t);
+        bottomColor = mix(dayBottom, sunsetBottom, t);
+    }
+    else if (tod < 0.90) {
+        // Sunset to dusk
+        float t = (tod - 0.80) / 0.10;
+        topColor    = mix(sunsetTop, dawnTop * 0.6, t);
+        bottomColor = mix(sunsetBottom, dawnBottom * 0.5, t);
+    }
+    else {
+        // Dusk to night
+        float t = (tod - 0.90) / 0.10;
+        topColor    = mix(dawnTop * 0.6, nightTop, t);
+        bottomColor = mix(dawnBottom * 0.5, nightBottom, t);
+    }
+
+    // Vertical gradient
+    vec3 sky = mix(bottomColor, topColor, normalizedY);
+
+    // Stars at night
+    if (sunElevation < 0.2) {
+        float nightFactor = 1.0 - clamp(sunElevation / 0.2, 0.0, 1.0);
+        float star = hashNoise(pos * 7);
+        if (star > 0.997) {
+            float twinkle = sin(time * 3.0 + star * 100.0) * 0.3 + 0.7;
+            sky += vec3(twinkle * nightFactor * 0.8);
+        }
+    }
+
+    // Sun disc
+    if (showSun && sunElevation > -0.05) {
+        // Sun position: horizontal center, vertical based on elevation
+        float sunX = 0.5;
+        float sunY = -0.2 + sunElevation * 1.0;
+
+        float normX = float(pos.x) / float(size.x);
+
+        float dx = normX - sunX;
+        float dy = normalizedY - sunY;
+        float aspect = float(size.x) / float(size.y);
+        dx *= aspect;
+
+        float distToSun = sqrt(dx * dx + dy * dy);
+
+        // Sun disc size
+        float sunRadius = 0.04;
+        float glowRadius = 0.15;
+
+        // Sun color: white at noon, orange at dawn/dusk
+        vec3 sunColor;
+        if (sunElevation < 0.3) {
+            float t = sunElevation / 0.3;
+            sunColor = mix(vec3(1.0, 0.4, 0.1), vec3(1.0, 0.95, 0.8), t);
+        } else {
+            sunColor = vec3(1.0, 0.98, 0.9);
+        }
+
+        // 1. Draw the glow first (applied to all pixels within glowRadius)
+        if (distToSun < glowRadius) {
+            // Start the glow falloff from the center (0.0) out to glowRadius
+            float glow = 1.0 - smoothstep(0.0, glowRadius, distToSun);
+            glow = glow * glow; // non-linear falloff
+            float glowStrength = clamp(sunElevation * 3.0 + 0.2, 0.0, 0.6);
+            sky += sunColor * glow * glowStrength;
+        }
+
+        // 2. Draw the solid sun disc on top
+        if (distToSun < sunRadius) {
+            // Fixed smoothstep: lower bound first, upper bound second.
+            // This fades from 1.0 (opaque center) to 0.0 (transparent edge).
+            float softEdge = 1.0 - smoothstep(sunRadius * 0.8, sunRadius, distToSun);
+            sky = mix(sky, sunColor, softEdge * clamp(sunElevation * 5.0 + 0.5, 0.0, 1.0));
+        }
+    }
+
+    return clamp(sky, 0.0, 1.0);
 }
 
 // Normal Computation
@@ -66,7 +202,6 @@ float getHeight(ivec2 pos, ivec2 size) {
 
     // Gemstones: faceted height for sparkle
     if (elements[elem].gemstone == 1) {
-        // Create faceted surface using quantized position noise
         float facet = floor(hashNoise(pos) * 4.0) / 4.0;
         baseHeight = 0.7 + facet * 0.3;
     }
@@ -82,63 +217,51 @@ float getHeight(ivec2 pos, ivec2 size) {
 
 vec3 computeNormal(ivec2 pos, ivec2 size, uint element) {
     if (element == EMPTY || element >= MAX_ELEMENTS) {
-        return vec3(0.0, 0.0, 1.0); // Flat up-facing normal for empty space
+        return vec3(0.0, 0.0, 1.0);
     }
 
     int type = elements[element].type;
 
-    // Gemstones: faceted normals that create sparkle/shimmer
     if (elements[element].gemstone == 1) {
-        // Create distinct facets using a coarse grid
-        // Each facet has its own normal that rotates with time for shimmer
-        float facetSeed = floor(hashNoise(pos) * 6.0); // 6 possible facet orientations
-        float shimmerPhase = time * 2.0 + facetSeed * 1.047; // 60 degree offsets
-
-        // Stronger angular variation for gemstones
+        float facetSeed = floor(hashNoise(pos) * 6.0);
+        float shimmerPhase = time * 2.0 + facetSeed * 1.047;
         float nx = sin(shimmerPhase) * 0.4 + (hashNoise(pos) - 0.5) * 0.3;
         float ny = cos(shimmerPhase * 0.7) * 0.4 + (hashNoise2(pos) - 0.5) * 0.3;
         float nz = 1.0;
         return normalize(vec3(nx, ny, nz));
     }
 
-    // BlackHole: warped normals for gravitational lensing effect
     if (element == BLACKHOLE) {
         float angle = time * 3.0 + hashNoise(pos) * 6.28;
         float warp = 0.6;
         return normalize(vec3(sin(angle) * warp, cos(angle) * warp, 0.3));
     }
 
-    // Void: inward-pulling normals
     if (element == VOID) {
         float distort = sin(time * 2.0 + hashNoise(pos) * 10.0) * 0.3;
         return normalize(vec3(distort, distort * 0.5, 0.8));
     }
 
-    // Liquid: very smooth flowing normals
     if (type == 2) {
         float wave = sin(time * 2.0 + float(pos.x) * 0.5) * 0.15;
         float wave2 = cos(time * 1.5 + float(pos.y) * 0.3) * 0.1;
         return normalize(vec3(wave, wave2, 1.0));
     }
 
-    // Gas: soft puffy normals
     if (type == 3) {
         float puff = sin(float(pos.x) * 0.8 + time) * 0.1;
         float puff2 = cos(float(pos.y) * 0.6 + time * 0.7) * 0.1;
         return normalize(vec3(puff, puff2, 1.0));
     }
 
-    // Standard height-field gradient for solids and granulars
     float hL = getHeight(pos + ivec2(-1, 0), size);
     float hR = getHeight(pos + ivec2( 1, 0), size);
     float hD = getHeight(pos + ivec2(0, -1), size);
     float hU = getHeight(pos + ivec2(0,  1), size);
 
-    // Sobel-like gradient
     float dx = hR - hL;
     float dy = hU - hD;
 
-    // For granular, add subtle per-pixel noise to normals
     if (type == 1) {
         dx += (hashNoise(pos) - 0.5) * 0.15;
         dy += (hashNoise2(pos) - 0.5) * 0.15;
@@ -147,44 +270,28 @@ vec3 computeNormal(ivec2 pos, ivec2 size, uint element) {
     return normalize(vec3(-dx, -dy, 0.5));
 }
 
-// Specular Power
-// Returns how shiny/specular this element is (stored in normal.w)
 float getSpecularPower(uint element) {
     if (element == EMPTY || element >= MAX_ELEMENTS) return 0.0;
-
-    // Gemstones: very high specular
     if (elements[element].gemstone == 1) return 64.0;
-
     int type = elements[element].type;
-
-    // Liquids: moderately reflective
     if (type == 2) return 16.0;
-
-    // Obsidian: somewhat reflective
     if (element == OBSIDIAN) return 24.0;
-
-    // Stone: slight sheen
     if (element == STONE) return 4.0;
-
-    // Light element: emissive, no specular needed
     if (element == LIGHT) return 0.0;
-
-    // BlackHole: high specular for event horizon shine
     if (element == BLACKHOLE) return 32.0;
-
-    // Void: slight dark sheen
     if (element == VOID) return 8.0;
-
-    // Default
     return 1.0;
 }
 
-// Color
-
-vec4 getColor(uint element, uint life, ivec2 pos) {
+vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
     float variation = hashNoise(pos);
 
     if (element == EMPTY) {
+        if (skyEnabled) {
+            float normalizedY = float(pos.y) / float(size.y);
+            vec3 sky = skyColor(normalizedY, timeOfDay, pos, size);
+            return vec4(sky, 1.0);
+        }
         return backgroundColor;
     }
 
@@ -199,24 +306,15 @@ vec4 getColor(uint element, uint life, ivec2 pos) {
 
     // BOMB
     if (element == BOMB) {
-        float fuseProgress = float(life) / 250.0; // 0..1 over fuse duration
+        float fuseProgress = float(life) / 250.0;
         fuseProgress = clamp(fuseProgress, 0.0, 1.0);
-
-        // Base color: dark gray bomb body
         vec3 bombColor = vec3(0.2, 0.2, 0.2);
-
-        // Flashing red warning that speeds up as fuse burns
-        float flashRate = 3.0 + fuseProgress * 20.0; // Starts slow, gets frantic
+        float flashRate = 3.0 + fuseProgress * 20.0;
         float flash = sin(time * flashRate) * 0.5 + 0.5;
-        flash *= fuseProgress; // No flash at start, full flash near end
-
-        // Mix between dark body and bright red warning
+        flash *= fuseProgress;
         vec3 warningColor = vec3(1.0, 0.2, 0.0);
         bombColor = mix(bombColor, warningColor, flash);
-
-        // Add per-pixel noise for texture
         bombColor += (variation - 0.5) * 0.05;
-
         return vec4(clamp(bombColor, 0.0, 1.0), 1.0);
     }
 
@@ -224,7 +322,6 @@ vec4 getColor(uint element, uint life, ivec2 pos) {
     if (element == VOID) {
         float distort = sin(time * 1.5 + variation * 10.0 + float(pos.x) * 0.3) * 0.03;
         vec3 voidColor = vec3(0.02 + distort, 0.0, 0.05 + distort * 2.0);
-        // Subtle edge shimmer
         float edgeNoise = hashNoise2(pos);
         voidColor += vec3(0.03, 0.0, 0.06) * edgeNoise * sin(time * 2.0 + float(pos.y) * 0.5) * 0.5;
         return vec4(clamp(voidColor, 0.0, 1.0), 1.0);
@@ -239,33 +336,22 @@ vec4 getColor(uint element, uint life, ivec2 pos) {
 
     // BLACK HOLE
     if (element == BLACKHOLE) {
-        // Core is pure black
         vec3 holeColor = vec3(0.0);
-
-        // Subtle rotating accretion glow at edges
         float angle = atan(float(pos.y), float(pos.x)) + time * 2.0;
         float ring = sin(angle * 3.0 + variation * 6.28) * 0.5 + 0.5;
-
-        // Very faint purple-orange glow
-        vec3 accretionColor = mix(
-            vec3(0.4, 0.1, 0.6),  // Purple
-            vec3(0.8, 0.3, 0.05), // Orange
-            ring
-        );
-
+        vec3 accretionColor = mix(vec3(0.4, 0.1, 0.6), vec3(0.8, 0.3, 0.05), ring);
         holeColor += accretionColor * 0.15 * (sin(time * 4.0 + variation * 3.14) * 0.3 + 0.7);
-
         return vec4(clamp(holeColor, 0.0, 1.0), 1.0);
     }
 
-    // Light element: bright white with subtle warm pulse
+    // Light element
     if (element == LIGHT) {
         float pulse = sin(time * 1.5 + variation * 3.14) * 0.05 + 0.95;
         varied = vec3(1.0, 0.98, 0.9) * pulse;
         return vec4(varied, 1.0);
     }
 
-    // Fire - flickering based on life
+    // Fire
     if (element == FIRE) {
         float flicker = sin(time * 10.0 + variation * 10.0) * 0.5 + 0.5;
         float lifeFactor = float(life) / 255.0;
@@ -273,54 +359,44 @@ vec4 getColor(uint element, uint life, ivec2 pos) {
         return vec4(varied, 0.9 * lifeFactor);
     }
 
-    // SMOKE: color changes with lifetime
+    // SMOKE
     if (element == SMOKE) {
-        float lifeFactor = float(life) / 200.0; // normalize to 0..1 range
+        float lifeFactor = float(life) / 200.0;
         lifeFactor = clamp(lifeFactor, 0.0, 1.0);
-
-        // Fresh smoke: dark gray. Dying smoke: light gray with slight blue
         vec3 freshColor = vec3(0.3, 0.3, 0.32);
         vec3 oldColor = vec3(0.6, 0.6, 0.65);
         vec3 smokeColor = mix(oldColor, freshColor, lifeFactor);
-
-        // Per-pixel color variation
         smokeColor += (variation - 0.5) * 0.08;
         float variation2 = hashNoise2(pos);
         smokeColor.r += (variation2 - 0.5) * 0.05;
-
-        // Opacity: fresh = more opaque, old = fading
         float alpha = lifeFactor * 0.5 + 0.05;
-
         return vec4(smokeColor, alpha);
     }
 
-    // Grass color variation based on life
+    // Grass
     if (element == GRASS) {
         float lifeFactor = float(life) / 255.0;
         varied.r += (1.0 - lifeFactor) * 0.15;
         varied.g -= (1.0 - lifeFactor) * 0.1;
     }
 
-    // Plant leaves - subtle wind sway
+    // Plant
     if (element == PLANT) {
         float sway = sin(time * 1.5 + float(pos.x) * 0.3 + float(pos.y) * 0.2) * 0.04;
         varied.g += sway + variation * 0.12;
         varied.r += variation * 0.05;
     }
 
-    // Sapling - pulsing growth indicator
+    // Sapling
     if (element == SAPLING) {
         float pulse = sin(time * 4.0) * 0.15 + 0.85;
         varied *= pulse;
     }
 
-    // Gemstones: enhanced color saturation + sparkle
+    // Gemstones
     if (elements[element].gemstone == 1) {
-        // Boost saturation
         float lum = dot(varied, vec3(0.299, 0.587, 0.114));
-        varied = mix(vec3(lum), varied, 1.4); // 140% saturation
-
-        // Sparkle highlights based on time
+        varied = mix(vec3(lum), varied, 1.4);
         float sparkle = pow(max(sin(time * 5.0 + variation * 20.0), 0.0), 8.0);
         varied += sparkle * 0.3;
     }
@@ -344,11 +420,20 @@ void main() {
     uint life = state.g;
 
     // Output color
-    vec4 color = getColor(element, life, pos);
+    vec4 color = getColor(element, life, pos, size);
     imageStore(colorOut, pos, color);
 
     // Output normal + specular
     vec3 normal = computeNormal(pos, size, element);
     float specPower = getSpecularPower(element);
     imageStore(normalOut, pos, vec4(normal, specPower));
+
+    // Output sky color for background blending in composite
+    if (skyEnabled) {
+        float normalizedY = float(pos.y) / float(size.y);
+        vec3 sky = skyColor(normalizedY, timeOfDay, pos, size);
+        imageStore(skyOut, pos, vec4(sky, 1.0));
+    } else {
+        imageStore(skyOut, pos, backgroundColor);
+    }
 }

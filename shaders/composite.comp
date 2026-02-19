@@ -7,6 +7,7 @@ layout(rgba8,   binding = 1) uniform readonly  image2D  colorIn;
 layout(rgba16f, binding = 2) uniform readonly  image2D  normalIn;
 layout(rgba16f, binding = 3) uniform readonly  image2D  lightmapIn;
 layout(rgba8,   binding = 4) uniform writeonly image2D  displayOut;
+layout(rgba8,   binding = 5) uniform readonly  image2D  skyIn;
 
 struct ElementData {
     vec4 color;
@@ -31,6 +32,8 @@ layout(std430, binding = 2) buffer ElementRegistry {
 uniform float ambientLight;
 uniform float specularStrength;
 uniform float time;
+uniform bool skyEnabled;
+uniform float timeOfDay;
 
 void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
@@ -41,19 +44,19 @@ void main() {
     vec4 color    = imageLoad(colorIn, pos);
     vec4 normData = imageLoad(normalIn, pos);
     vec4 light    = imageLoad(lightmapIn, pos);
+    vec4 skyColor = imageLoad(skyIn, pos);
 
     uint elem = state.r;
 
-    // Empty pixels: just use the base color (background), no lighting
+    // Empty pixels
     if (elem == EMPTY) {
-        // Even empty space gets a subtle glow from nearby light for atmosphere
         vec3 ambientGlow = light.rgb * 0.08;
         vec3 final = color.rgb + ambientGlow;
         imageStore(displayOut, pos, vec4(clamp(final, 0.0, 1.0), color.a));
         return;
     }
 
-    // Light element itself: always full brightness, it IS the light
+    // Light element itself
     if (elem == LIGHT) {
         imageStore(displayOut, pos, vec4(color.rgb, 1.0));
         return;
@@ -63,8 +66,7 @@ void main() {
     float specPower = normData.w;
     vec3 lightColor = light.rgb;
 
-    // ─── Self-emitting elements ───
-    // Fire, Lava, and other glowing elements emit their own light
+    // Self-emitting elements
     bool isSelfLit = false;
     if (elem < MAX_ELEMENTS) {
         if (elements[elem].glow == 1 || elem == FIRE) {
@@ -72,69 +74,92 @@ void main() {
         }
     }
 
-    // ─── Diffuse lighting ───
-    // The lightmap already contains directional light info accumulated from all sources.
-    // We use the normal to modulate how much light this pixel receives.
-    // Since we don't have a single light direction, we use the light intensity directly
-    // with a normal-based modulation for depth/shape.
-    float lightIntensity = length(lightColor);
+    // Sky-based directional sunlight
+    vec3 sunDirection = vec3(0.0, 0.0, 1.0);
+    vec3 sunColor = vec3(1.0);
+    float sunStrength = 0.0;
 
-    // Normal-based shading: pixels facing "up" (away from surface) get more light
-    // This gives the impression of directional lighting even with point lights
-    float normalFactor = normal.z * 0.6 + 0.4; // Bias toward receiving light
+    if (skyEnabled) {
+        float sunElevation = sin(timeOfDay * 3.14159);
+        float sunHoriz = cos(timeOfDay * 3.14159) * 0.5;
 
-    vec3 diffuse = color.rgb * (ambientLight + lightColor * normalFactor);
+        sunDirection = normalize(vec3(sunHoriz, sunElevation * 0.7, 0.8));
+        sunStrength = max(sunElevation, 0.0);
 
-    // ─── Specular highlights ───
-    // For reflective materials (gemstones, water, obsidian)
-    vec3 specular = vec3(0.0);
-    if (specPower > 1.0 && lightIntensity > 0.05) {
-        // Approximate view direction (looking straight at the 2D plane)
-        vec3 viewDir = vec3(0.0, 0.0, 1.0);
-
-        // Approximate the dominant light direction from the lightmap gradient
-        ivec2 pR = clamp(pos + ivec2(1, 0), ivec2(0), size - 1);
-        ivec2 pL = clamp(pos + ivec2(-1, 0), ivec2(0), size - 1);
-        ivec2 pU = clamp(pos + ivec2(0, 1), ivec2(0), size - 1);
-        ivec2 pD = clamp(pos + ivec2(0, -1), ivec2(0), size - 1);
-        vec3 lightDir = normalize(vec3(
-            imageLoad(lightmapIn, pR).r - imageLoad(lightmapIn, pL).r,
-            imageLoad(lightmapIn, pU).r - imageLoad(lightmapIn, pD).r,
-            0.5
-        ));
-
-        // Blinn-Phong specular
-        vec3 halfDir = normalize(lightDir + viewDir);
-        float spec = pow(max(dot(normal, halfDir), 0.0), specPower);
-
-        specular = lightColor * spec * specularStrength;
-
-        // Gemstones: extra rainbow dispersion effect
-        if (elem < MAX_ELEMENTS && elements[elem].gemstone == 1) {
-            // Chromatic dispersion: slightly shift specular color based on angle
-            float angle = dot(normal.xy, lightDir.xy);
-            vec3 dispersion = vec3(
-                spec * (1.0 + angle * 0.3),
-                spec,
-                spec * (1.0 - angle * 0.3)
-            );
-            specular = lightColor * dispersion * specularStrength * 1.5;
+        if (sunElevation < 0.3) {
+            float t = max(sunElevation, 0.0) / 0.3;
+            sunColor = mix(vec3(1.0, 0.5, 0.2), vec3(1.0, 0.95, 0.9), t);
+        }
+        else {
+            sunColor = vec3(1.0, 0.98, 0.92);
         }
     }
 
-    // ─── Self-illumination ───
+    // Diffuse lighting
+    float lightIntensity = length(lightColor);
+    float normalFactor = normal.z * 0.6 + 0.4;
+
+    // Base ambient + point light contributions
+    vec3 diffuse = color.rgb * (ambientLight + lightColor * normalFactor);
+
+    // Add directional sunlight when sky is enabled
+    if (skyEnabled && sunStrength > 0.01) {
+        float sunDiffuse = max(dot(normal, sunDirection), 0.0);
+        diffuse += color.rgb * sunColor * sunDiffuse * sunStrength * 0.4;
+    }
+
+    // Specular highlights
+    vec3 specular = vec3(0.0);
+    if (specPower > 1.0) {
+        vec3 viewDir = vec3(0.0, 0.0, 1.0);
+
+        // Combine point light specular and sun specular
+        if (lightIntensity > 0.05) {
+            ivec2 pR = clamp(pos + ivec2(1, 0), ivec2(0), size - 1);
+            ivec2 pL = clamp(pos + ivec2(-1, 0), ivec2(0), size - 1);
+            ivec2 pU = clamp(pos + ivec2(0, 1), ivec2(0), size - 1);
+            ivec2 pD = clamp(pos + ivec2(0, -1), ivec2(0), size - 1);
+            vec3 lightDir = normalize(vec3(
+                imageLoad(lightmapIn, pR).r - imageLoad(lightmapIn, pL).r,
+                imageLoad(lightmapIn, pU).r - imageLoad(lightmapIn, pD).r,
+                0.5
+            ));
+
+            vec3 halfDir = normalize(lightDir + viewDir);
+            float spec = pow(max(dot(normal, halfDir), 0.0), specPower);
+            specular += lightColor * spec * specularStrength;
+
+            // Gemstone dispersion
+            if (elem < MAX_ELEMENTS && elements[elem].gemstone == 1) {
+                float angle = dot(normal.xy, lightDir.xy);
+                vec3 dispersion = vec3(
+                    spec * (1.0 + angle * 0.3),
+                    spec,
+                    spec * (1.0 - angle * 0.3)
+                );
+                specular = lightColor * dispersion * specularStrength * 1.5;
+            }
+        }
+
+        // Sun specular
+        if (skyEnabled && sunStrength > 0.05) {
+            vec3 sunHalf = normalize(sunDirection + viewDir);
+            float sunSpec = pow(max(dot(normal, sunHalf), 0.0), specPower);
+            specular += sunColor * sunSpec * specularStrength * sunStrength * 0.5;
+        }
+    }
+
+    // Self-illumination
     vec3 emission = vec3(0.0);
     if (isSelfLit) {
-        // Self-lit elements are always visible at their base color
         emission = color.rgb * 0.6;
     }
 
-    // ─── Final composition ───
     vec3 final = diffuse + specular + emission;
 
-    // Tone mapping: soft clamp to prevent harsh clipping
-    final = final / (final + vec3(1.0)); // Reinhard
-    final = pow(final, vec3(1.0 / 1.1)); // Slight gamma for warmth
+    // Tonemapping
+    final = final / (final + vec3(1.0));
+    final = pow(final, vec3(1.0 / 1.1));
 
     imageStore(displayOut, pos, vec4(clamp(final, 0.0, 1.0), color.a));
 }

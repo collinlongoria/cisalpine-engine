@@ -36,14 +36,11 @@ const int TYPE_GRANULAR = 1;
 const int TYPE_LIQUID   = 2;
 const int TYPE_GAS      = 3;
 
-// Bomb timing: ticks per sim step. At 60 sim steps/sec * 4 steps/frame,
-// 5 seconds = 300 ticks. We use the G channel (life) as countdown.
-// Bomb is placed with life=0 (unlit). On landing, it gets life=255 and starts
-// counting down via the B channel as a frame-based fuse.
-const uint BOMB_FUSE_TICKS  = 250u; // ~5 seconds at base sim rate
+// Bomb timing
+const uint BOMB_FUSE_TICKS  = 250u;
 const float BOMB_DESTROY_RADIUS = 12.0;
 
-// ─── Helpers ───
+// Helpers
 
 bool inBounds(ivec2 p) {
     return (p.x >= 0 && p.x < int(worldSize.x) &&
@@ -72,7 +69,6 @@ uint hash2u(uvec2 v) {
     return hashU32(v.x ^ (v.y + 0x9e3779b9u + (v.x<<6) + (v.x>>2)));
 }
 
-// Hash with extra salt for independent random streams
 uint hash3u(uvec2 v, uint salt) {
     return hashU32(v.x ^ (v.y + salt + 0x9e3779b9u + (v.x<<6) + (v.x>>2)));
 }
@@ -104,7 +100,7 @@ bool isDoomed(ivec2 pos) {
     return false;
 }
 
-// ─── Type checks ───
+// Type checks
 
 bool isStatic(uint id) {
     return id < MAX_ELEMENTS && elements[id].type == TYPE_STATIC;
@@ -144,12 +140,11 @@ bool hasLife(uint id) {
     return id < MAX_ELEMENTS && elements[id].maxLife > 0;
 }
 
-// Is this element indestructible? (Void and BlackHole cannot be destroyed by bombs)
 bool isIndestructible(uint id) {
     return id == VOID || id == BLACKHOLE;
 }
 
-// ─── Movement Logic ───
+// Movement Logic
 
 bool canDisplace(uint mover, uint target) {
     if (target == EMPTY) return true;
@@ -162,7 +157,7 @@ bool canDisplace(uint mover, uint target) {
     float dMover = elements[mover].density;
     float dTarget = elements[target].density;
 
-    // Fire destroys smoke (both are gases, fire is special)
+    // Fire destroys smoke
     if (mover == FIRE && target == SMOKE) return true;
 
     // Heavier things displace lighter fluids/gases
@@ -174,42 +169,55 @@ bool canDisplace(uint mover, uint target) {
     return false;
 }
 
-// ─── Force-biased movement ───
-// Returns a destination influenced by the force field at this position.
-// Forces override normal gravity/movement when strong enough.
+// Force-biased movement
 
 ivec2 forceBasedDest(ivec2 src, uint elem, vec2 force) {
-    // Convert force to a pixel offset
-    // We use a probabilistic approach: the force magnitude determines the
-    // chance of moving in that direction, and the direction picks the neighbor
     float forceMag = length(force);
-    if (forceMag < 0.5) return ivec2(-1); // No significant force, return sentinel
+
+    // Static elements need much stronger force to be moved
+    float threshold = 0.5;
+    float moveScale = 0.15;
+    if (isStatic(elem) && elem != VOID && elem != BLACKHOLE) {
+        threshold = 5.0;
+        moveScale = 0.08;
+    }
+    else if (isGranular(elem)) {
+        threshold = 0.3;
+        moveScale = 0.18;
+    }
+
+    if (forceMag < threshold) return ivec2(-1); // No significant force, return sentinel
 
     // Normalize direction
     vec2 dir = force / forceMag;
 
     // Probability of force-based movement scales with magnitude
-    float moveChance = clamp(forceMag * 0.15, 0.0, 0.95);
+    float moveChance = clamp((forceMag - threshold) * moveScale, 0.0, 0.95);
     float roll = float(hash3u(uvec2(src), frameCount * 7u + 31u) & 0xFFFFu) / 65535.0;
     if (roll > moveChance) return ivec2(-1);
 
-    // Pick the best neighbor in the force direction
-    // Try the primary direction first, then adjacent
     int bestDx = int(round(dir.x));
     int bestDy = int(round(dir.y));
 
-    // Clamp to neighbor range
     bestDx = clamp(bestDx, -1, 1);
     bestDy = clamp(bestDy, -1, 1);
 
     if (bestDx == 0 && bestDy == 0) return ivec2(-1);
 
     ivec2 primary = src + ivec2(bestDx, bestDy);
-    if (inBounds(primary) && canDisplace(elem, getElement(primary))) {
-        return primary;
+
+    if (inBounds(primary)) {
+        uint targetElem = getElement(primary);
+        if (targetElem == EMPTY) return primary;
+
+        if (forceMag > threshold * 2.0 && targetElem != VOID && targetElem != BLACKHOLE) {
+            if (targetElem != elem) {
+                return primary;
+            }
+        }
+        if (canDisplace(elem, targetElem)) return primary;
     }
 
-    // Try adjacent directions
     ivec2 alt1 = src + ivec2(bestDx, 0);
     ivec2 alt2 = src + ivec2(0, bestDy);
 
@@ -224,13 +232,13 @@ ivec2 forceBasedDest(ivec2 src, uint elem, vec2 force) {
 }
 
 ivec2 desiredDest(ivec2 src, uint elem) {
-    if (isStatic(elem)) return src;
-
-    // ─── Force field check ───
-    // If there's a significant force here, it can override normal movement
     vec2 force = getForce(src);
-    ivec2 forceDest = forceBasedDest(src, elem, force);
-    if (forceDest.x >= 0) return forceDest;
+    if (elem != VOID && elem != BLACKHOLE) {
+        ivec2 forceDest = forceBasedDest(src, elem, force);
+        if (forceDest.x >= 0) return forceDest;
+    }
+
+    if (isStatic(elem)) return src;
 
     int type = elements[elem].type;
     ivec2 down  = src + ivec2(0, -1);
@@ -244,7 +252,7 @@ ivec2 desiredDest(ivec2 src, uint elem) {
 
     bool leftFirst = (hash2u(uvec2(src) ^ uvec2(frameCount)) & 1u) == 0u;
 
-    // ─── Light element drift ───
+    // element drift
     if (type == TYPE_GRANULAR) {
         float density = elements[elem].density;
 
@@ -257,7 +265,8 @@ ivec2 desiredDest(ivec2 src, uint elem) {
                 if (leftFirst) {
                     if (canDisplace(elem, getElement(downL))) return downL;
                     if (canDisplace(elem, getElement(downR))) return downR;
-                } else {
+                }
+                else {
                     if (canDisplace(elem, getElement(downR))) return downR;
                     if (canDisplace(elem, getElement(downL))) return downL;
                 }
@@ -265,11 +274,11 @@ ivec2 desiredDest(ivec2 src, uint elem) {
             // Normal straight-down fall
             return down;
         }
-        // Can't fall straight — try diagonals normally
         if (leftFirst) {
             if (canDisplace(elem, getElement(downL))) return downL;
             if (canDisplace(elem, getElement(downR))) return downR;
-        } else {
+        }
+        else {
             if (canDisplace(elem, getElement(downR))) return downR;
             if (canDisplace(elem, getElement(downL))) return downL;
         }
@@ -278,7 +287,7 @@ ivec2 desiredDest(ivec2 src, uint elem) {
     else if (type == TYPE_LIQUID) {
         if (canDisplace(elem, getElement(down))) return down;
 
-        // Viscosity check - higher viscosity = more likely to stay put
+        // Viscosity check
         if (random01(src) < elements[elem].viscosity) return src;
 
         if (leftFirst) {
@@ -286,7 +295,8 @@ ivec2 desiredDest(ivec2 src, uint elem) {
             if (canDisplace(elem, getElement(downR))) return downR;
             if (canDisplace(elem, getElement(left))) return left;
             if (canDisplace(elem, getElement(right))) return right;
-        } else {
+        }
+        else {
             if (canDisplace(elem, getElement(downR))) return downR;
             if (canDisplace(elem, getElement(downL))) return downL;
             if (canDisplace(elem, getElement(right))) return right;
@@ -301,7 +311,8 @@ ivec2 desiredDest(ivec2 src, uint elem) {
             if (getElement(upR) == EMPTY) return upR;
             if (getElement(left) == EMPTY) return left;
             if (getElement(right) == EMPTY) return right;
-        } else {
+        }
+        else {
             if (getElement(upR) == EMPTY) return upR;
             if (getElement(upL) == EMPTY) return upL;
             if (getElement(right) == EMPTY) return right;
@@ -315,14 +326,35 @@ ivec2 desiredDest(ivec2 src, uint elem) {
 bool sourceProposesTo(ivec2 src, ivec2 dest) {
     if (!inBounds(src)) return false;
 
-    // If the source is about to be destroyed by a Black Hole,
-    // it cannot propose movement. It must stay and die.
     if (isDoomed(src)) return false;
 
+    // Don't allow proposals to move into a growing sapling
+    if (inBounds(dest)) {
+        uvec4 destState = getState(dest);
+        if (destState.r == SAPLING && destState.b > 0u) return false;
+    }
+
+    if (isDoomed(dest)) return false;
+
     uint e = getElement(src);
-    if (e == EMPTY || isImmobile(e)) return false;
+    if (e == EMPTY) return false;
+
+    if (e == VOID || e == BLACKHOLE) return false;
+
     ivec2 d = desiredDest(src, e);
-    return (d == dest && canDisplace(e, getElement(dest)));
+    if (d != dest) return false;
+
+    // Check if displacement is valid
+    uint destElem = getElement(dest);
+    if (canDisplace(e, destElem)) return true;
+
+    // Force override: strong force can push into occupied cells
+    if (destElem != VOID && destElem != BLACKHOLE && destElem != e) {
+        vec2 force = getForce(src);
+        if (length(force) > 5.0) return true;
+    }
+
+    return false;
 }
 
 ivec2 pickWinnerForDest(ivec2 dest) {
@@ -330,7 +362,7 @@ ivec2 pickWinnerForDest(ivec2 dest) {
     uint bestScore = 0u;
     bool found = false;
 
-    // Check neighbors — expand to 2-range to allow force-pushed elements
+    // Check neighbors
     for (int oy = -1; oy <= 1; ++oy) {
         for (int ox = -1; ox <= 1; ++ox) {
             if (ox == 0 && oy == 0) continue;
@@ -348,7 +380,7 @@ ivec2 pickWinnerForDest(ivec2 dest) {
     return found ? best : ivec2(999999);
 }
 
-// ─── Sapling Tree Growth (Pull-Based) ───
+// Sapling Tree Growth
 const int MAX_TREE_HEIGHT = 25;
 const int MAX_TREE_SPREAD = 8;
 
@@ -497,19 +529,20 @@ void main() {
     ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
     if (!inBounds(pos)) return;
 
-    // 1. Check if anything is moving into us.
-    // If we are the destination for a move, that takes priority over everything else.
+    // Pre-load current state for displacement protection checks
+    uvec4 cur = getState(pos);
+    uint elem = cur.r;
+    uint life = cur.g;
+
+    // Check if anything is moving into us.
+    bool isAnchored = (elem == SAPLING && cur.b > 0u); // Growing sapling
+
     ivec2 winner = pickWinnerForDest(pos);
-    if (winner.x != 999999) {
+    if (winner.x != 999999 && !isAnchored) {
         uvec4 winState = getState(winner);
         imageStore(stateOut, pos, winState);
         return; // We have been overwritten. Stop.
     }
-
-    // 2. Load current state only if we weren't overwritten
-    uvec4 cur = getState(pos);
-    uint elem = cur.r;
-    uint life = cur.g;
 
     // Boundary sentinel check
     if (elem >= MAX_ELEMENTS) {
@@ -517,9 +550,7 @@ void main() {
         return;
     }
 
-    // ═══════════════════════════════════════
     // VOID: Destroy anything touching it
-    // ═══════════════════════════════════════
     if (elem != VOID && elem != BLACKHOLE && elem != EMPTY) {
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
@@ -533,9 +564,7 @@ void main() {
         }
     }
 
-    // ═══════════════════════════════════════
-    // BLACK HOLE: Destroy anything touching it (pulled in by force field)
-    // ═══════════════════════════════════════
+    // BLACK HOLE: Destroy anything touching it
     if (elem != VOID && elem != BLACKHOLE && elem != EMPTY) {
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
@@ -549,32 +578,19 @@ void main() {
         }
     }
 
-    // ═══════════════════════════════════════
     // BOMB LOGIC
-    // Bomb uses channels:
-    //   R = BOMB (element id)
-    //   G = fuse timer (counts up from 0 to BOMB_FUSE_TICKS)
-    //   B = 0 normally, 255 = detonation frame flag
-    //   A = 0
-    //
-    // When placed, bomb has life=0. Each sim step increments G.
-    // When G reaches threshold, it detonates:
-    //   - Sets B=255 as signal to force_update shader
-    //   - Destroys elements in close radius
-    //   - Turns itself into Fire
-    // ═══════════════════════════════════════
     if (elem == BOMB) {
         uint fuse = cur.g;
         uint flags = cur.b;
 
-        // If this is the detonation frame (B==255), turn into fire + smoke
+        // If this is the detonation frame (B=255), turn into fire + smoke
         if (flags == 255u) {
             // Bomb center becomes fire
             imageStore(stateOut, pos, uvec4(FIRE, 255u, 0u, 0u));
             return;
         }
 
-        // Check if bomb has landed (not falling)
+        // Check if bomb has landed
         ivec2 below = pos + ivec2(0, -1);
         bool resting = !inBounds(below) || !canDisplace(elem, getElement(below));
 
@@ -582,30 +598,17 @@ void main() {
             fuse++;
 
             if (fuse >= BOMB_FUSE_TICKS) {
-                // DETONATE! Set the detonation flag in B channel.
-                // The force_update shader will read this and inject explosion force.
-                // Also destroy nearby elements directly.
                 int destroyR = int(BOMB_DESTROY_RADIUS);
-                // We can't write to other pixels from here (pull-based),
-                // but the detonation flag + force field handles the physics.
-                // The bomb itself becomes fire with detonation flag.
                 imageStore(stateOut, pos, uvec4(BOMB, 0u, 255u, 0u));
                 return;
             }
 
-            // Ticking bomb: flash color via life channel
             imageStore(stateOut, pos, uvec4(BOMB, fuse, 0u, 0u));
             return;
         }
-
-        // Bomb is still falling, pass through (don't tick fuse while airborne)
-        // Keep current state, movement will handle it below
     }
 
-    // ═══════════════════════════════════════
-    // BOMB DESTRUCTION CHECK (pull-based)
-    // If a nearby bomb is detonating (B==255), destroy this pixel
-    // ═══════════════════════════════════════
+    // BOMB DESTRUCTION CHECK
     if (elem != EMPTY && elem != BOMB && !isIndestructible(elem)) {
         int destroyR = int(BOMB_DESTROY_RADIUS);
         for (int dy = -destroyR; dy <= destroyR; dy++) {
@@ -616,19 +619,19 @@ void main() {
                 if (sState.r == BOMB && sState.b == 255u) {
                     float dist = length(vec2(dx, dy));
                     if (dist <= BOMB_DESTROY_RADIUS) {
-                        // Close to center: destroy. Further out: chance-based
+                        // Close things get destroyed, farther out is chance based
                         float destroyChance = 1.0 - (dist / BOMB_DESTROY_RADIUS);
                         destroyChance = destroyChance * destroyChance;
                         float roll = float(hash3u(uvec2(pos), frameCount + 777u) & 0xFFFFu) / 65535.0;
                         if (roll < destroyChance) {
-                            // Turn flammable things into fire, others into smoke/empty
                             if (isFlammable(elem)) {
                                 imageStore(stateOut, pos, uvec4(FIRE, 255u, 0u, 0u));
-                            } else {
-                                // Inner radius: empty. Outer: smoke
+                            }
+                            else {
                                 if (dist < BOMB_DESTROY_RADIUS * 0.4) {
                                     imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
-                                } else {
+                                }
+                                else {
                                     imageStore(stateOut, pos, uvec4(SMOKE, 180u, 0u, 0u));
                                 }
                             }
@@ -640,43 +643,69 @@ void main() {
         }
     }
 
-    // ═══════════════════════════════════════
     // REACTION LOGIC
-    // ═══════════════════════════════════════
 
     // Water + Lava interaction
     if (elem == WATER) {
-        bool touchingLava = false;
+        ivec2 lavaPos = ivec2(-1);
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
-                if (getElement(pos + ivec2(dx, dy)) == LAVA) {
-                    touchingLava = true;
+                if (dx == 0 && dy == 0) continue;
+                ivec2 np = pos + ivec2(dx, dy);
+                if (getElement(np) == LAVA) {
+                    lavaPos = np;
                 }
             }
         }
-        if (touchingLava) {
-            imageStore(stateOut, pos, uvec4(SMOKE, 200u, 0, 0));
-            return;
+        if (lavaPos.x >= 0) {
+            float reactRoll = float(hash3u(uvec2(pos), frameCount * 3u + 17u) & 0xFFFFu) / 65535.0;
+            if (reactRoll < 0.6) {
+                imageStore(stateOut, pos, uvec4(SMOKE, 200u, 0, 0));
+                return;
+            }
         }
     }
     if (elem == LAVA) {
         bool touchingWater = false;
         for (int dy = -1; dy <= 1; dy++) {
             for (int dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0) continue;
                 if (getElement(pos + ivec2(dx, dy)) == WATER) {
                     touchingWater = true;
                 }
             }
         }
         if (touchingWater) {
-            imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0, 0));
-            return;
+            float reactRoll = float(hash3u(uvec2(pos), frameCount * 5u + 23u) & 0xFFFFu) / 65535.0;
+            if (reactRoll < 0.6) {
+                imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0, 0));
+                return;
+            }
         }
     }
 
-    // ═══════════════════════════════════════
+    // Stone + Lava interaction: lava melts stone into more lava
+    if (elem == STONE) {
+        bool touchingLava = false;
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                if (getElement(pos + ivec2(dx, dy)) == LAVA) {
+                    touchingLava = true;
+                }
+            }
+        }
+        if (touchingLava) {
+            // Stone melts slowly into lava
+            float meltRoll = float(hash3u(uvec2(pos), frameCount * 11u + 41u) & 0xFFFFu) / 65535.0;
+            if (meltRoll < 0.08) {
+                imageStore(stateOut, pos, uvec4(LAVA, 0u, 0, 0));
+                return;
+            }
+        }
+    }
+
     // SMOKE DECAY
-    // ═══════════════════════════════════════
     if (elem == SMOKE) {
         if (life == 0u) {
             imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
@@ -693,7 +722,7 @@ void main() {
         cur.g = life - totalDecay;
     }
 
-    // Generic Life Decay (for non-smoke elements with life: Fire etc.)
+    // Generic Life Decay
     if (elem != SMOKE && elem != BOMB && hasLife(elem) && life > 0u) {
         uint decayRate = 4u;
         if (life <= decayRate) {
@@ -702,7 +731,8 @@ void main() {
             if (elem == FIRE) {
                 deathElem = SMOKE;
                 deathLife = 180u + (hash3u(uvec2(pos), frameCount) % 40u);
-            } else {
+            }
+            else {
                 deathElem = EMPTY;
                 deathLife = 0u;
             }
@@ -712,9 +742,7 @@ void main() {
         cur.g = life - decayRate;
     }
 
-    // ═══════════════════════════════════════
     // FLAMMABILITY
-    // ═══════════════════════════════════════
     if (isFlammable(elem)) {
         bool touchingFire = false;
         for(int dy = -1; dy <= 1; dy++) {
@@ -726,16 +754,15 @@ void main() {
         if (touchingFire && random01(pos) < elements[elem].probability) {
             if (elem == GRASS) {
                 imageStore(stateOut, pos, uvec4(DIRT, 0u, 0u, 0u));
-            } else {
+            }
+            else {
                 imageStore(stateOut, pos, uvec4(FIRE, 255u, 0, 0));
             }
             return;
         }
     }
 
-    // ═══════════════════════════════════════
     // SEED -> GRASS Logic
-    // ═══════════════════════════════════════
     if (elem == SEED) {
         ivec2 below = pos + ivec2(0, -1);
         bool resting = !inBounds(below) || !canDisplace(elem, getElement(below));
@@ -761,9 +788,7 @@ void main() {
         }
     }
 
-    // ═══════════════════════════════════════
     // GRASS Spreading
-    // ═══════════════════════════════════════
     if (elem == DIRT) {
         ivec2 dirs[8] = ivec2[8](
             ivec2(1,0), ivec2(-1,0), ivec2(0,-1), ivec2(0,1),
@@ -800,9 +825,7 @@ void main() {
         }
     }
 
-    // ═══════════════════════════════════════
     // SAPLING State Machine
-    // ═══════════════════════════════════════
     if (elem == SAPLING) {
         uint growthStep = cur.b;
         uint targetHeight = cur.g;
@@ -818,16 +841,15 @@ void main() {
             if (growthStep >= targetHeight) {
                 imageStore(stateOut, pos, uvec4(WOOD, 0u, 0u, 0u));
                 return;
-            } else {
+            }
+            else {
                 imageStore(stateOut, pos, uvec4(SAPLING, targetHeight, growthStep + 1u, 0u));
                 return;
             }
         }
     }
 
-    // ═══════════════════════════════════════
-    // TREE CLAIM CHECK (Pull-based)
-    // ═══════════════════════════════════════
+    // TREE CLAIM CHECK
     if (elem == EMPTY) {
         uint claimed = checkTreeClaim(pos);
         if (claimed != EMPTY) {
@@ -836,24 +858,45 @@ void main() {
         }
     }
 
-    // ═══════════════════════════════════════
     // MOVEMENT
-    // ═══════════════════════════════════════
 
     // Otherwise, try to move
-    if (!isEmpty(elem) && !isImmobile(elem)) {
+    if (!isEmpty(elem) && (elem != VOID && elem != BLACKHOLE)) {
         ivec2 dest = desiredDest(pos, elem);
-        if (dest != pos && canDisplace(elem, getElement(dest))) {
-            ivec2 w = pickWinnerForDest(dest);
-            if (w == pos) {
-                // We moved. Get what we displaced (swap)
-                uvec4 displaced = getState(dest);
-                imageStore(stateOut, pos, displaced);
-                return;
+        if (dest != pos) {
+            uint destElem = getElement(dest);
+            // Check if we can actually go there
+            bool canGo = canDisplace(elem, destElem);
+            // Force can push into occupied cells too
+            if (!canGo && destElem != VOID && destElem != BLACKHOLE) {
+                vec2 force = getForce(pos);
+                float forceMag = length(force);
+                if (forceMag > 5.0 && destElem != elem) {
+                    canGo = true; // Force override
+                }
+            }
+            if (canGo) {
+                ivec2 w = pickWinnerForDest(dest);
+                if (w == pos) {
+                    // We moved. Get what we displaced
+                    uvec4 displaced = getState(dest);
+                    uint dispElem = displaced.r;
+
+                    // mutual diagonal swap prevention
+                    if (dispElem != EMPTY && !isImmobile(dispElem)) {
+                        ivec2 dispDest = desiredDest(dest, dispElem);
+                        if (dispDest == pos) {
+                            imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                            return;
+                        }
+                    }
+
+                    imageStore(stateOut, pos, displaced);
+                    return;
+                }
             }
         }
     }
 
-    // If nothing happened, write back (possibly modified) state
     imageStore(stateOut, pos, cur);
 }

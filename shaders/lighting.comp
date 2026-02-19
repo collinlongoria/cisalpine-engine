@@ -33,6 +33,9 @@ uniform float glowRadius;
 uniform float time;
 uniform float ambientLight;
 uniform int bouncePass;
+uniform bool skyEnabled;
+uniform float timeOfDay;
+uniform bool showSun;
 
 // Helpers
 
@@ -47,7 +50,7 @@ float hashNoise(ivec2 pos) {
 // How much light a material absorbs per pixel traversed
 // 0 = fully transparent, 1 = fully opaque
 float getOpacity(uint elem) {
-    if (elem == EMPTY || elem >= MAX_ELEMENTS) return 0.0;\
+    if (elem == EMPTY || elem >= MAX_ELEMENTS) return 0.0;
 
     // BlackHole: absorbs ALL light
     if (elem == BLACKHOLE) return 1.0;

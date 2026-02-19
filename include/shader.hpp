@@ -38,6 +38,11 @@ public:
     GLuint id() const { return programId; }
 
     // Uniform setters
+    static GLint uniformLoc(GLuint programId, std::string_view name) {
+        std::string tmp(name);
+        return glGetUniformLocation(programId, tmp.c_str());
+    }
+
     void setBool(std::string_view name, bool value) const;
     void setInt(std::string_view name, int value) const;
     void setUint(std::string_view name, uint32_t value) const;

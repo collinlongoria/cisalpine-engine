@@ -28,6 +28,7 @@ World::~World() {
     if (lightmapTexture) glDeleteTextures(1, &lightmapTexture);
     if (lightmapPingPong) glDeleteTextures(1, &lightmapPingPong);
     if (displayTexture) glDeleteTextures(1, &displayTexture);
+    if (skyTexture) glDeleteTextures(1, &skyTexture);
     if (quadVAO) glDeleteVertexArrays(1, &quadVAO);
     if (quadVBO) glDeleteBuffers(1, &quadVBO);
 }
@@ -136,6 +137,15 @@ void World::createTextures() {
     // Create display texture (RGBA8)
     glGenTextures(1, &displayTexture);
     glBindTexture(GL_TEXTURE_2D, displayTexture);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, worldWidth, worldHeight);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+    // Create sky texture (RGBA8) - rendered by composite shader when sky enabled
+    glGenTextures(1, &skyTexture);
+    glBindTexture(GL_TEXTURE_2D, skyTexture);
     glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, worldWidth, worldHeight);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
@@ -268,9 +278,11 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
     // binding 0: stateIn (RGBA8UI, read)
     // binding 1: colorOut (RGBA8, write)
     // binding 2: normalOut (RGBA16F, write)
+    // binding 5: skyOut (RGBA8, write) - sky gradient for background
     glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
     glBindImageTexture(1, colorTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
     glBindImageTexture(2, normalTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+    glBindImageTexture(5, skyTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
 
     renderShader.use();
     renderShader.setVec4("backgroundColor",
@@ -279,6 +291,9 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
         renderSettingsData.backgroundColor.b,
         renderSettingsData.backgroundColor.a);
     renderShader.setFloat("time", simulationTime);
+    renderShader.setBool("skyEnabled", renderSettingsData.skyEnabled);
+    renderShader.setFloat("timeOfDay", renderSettingsData.timeOfDay);
+    renderShader.setBool("showSun", renderSettingsData.showSun);
 
     glDispatchCompute(workGroupsX, workGroupsY, 1);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
@@ -290,6 +305,9 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
     lightingShader.setFloat("glowRadius", renderSettingsData.glowRadius);
     lightingShader.setFloat("time", simulationTime);
     lightingShader.setFloat("ambientLight", renderSettingsData.ambientLight);
+    lightingShader.setBool("skyEnabled", renderSettingsData.skyEnabled);
+    lightingShader.setFloat("timeOfDay", renderSettingsData.timeOfDay);
+    lightingShader.setBool("showSun", renderSettingsData.showSun);
 
     int bounces = renderSettingsData.lightBounces;
     for (int bounce = 0; bounce < bounces; bounce++) {
@@ -323,16 +341,20 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
     // binding 2: normalIn
     // binding 3: lightmapIn
     // binding 4: displayOut
+    // binding 5: skyIn
     glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
     glBindImageTexture(1, colorTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
     glBindImageTexture(2, normalTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
     glBindImageTexture(3, finalLightmap, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
     glBindImageTexture(4, displayTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
+    glBindImageTexture(5, skyTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
 
     compositeShader.use();
     compositeShader.setFloat("ambientLight", renderSettingsData.ambientLight);
     compositeShader.setFloat("specularStrength", renderSettingsData.specularStrength);
     compositeShader.setFloat("time", simulationTime);
+    compositeShader.setBool("skyEnabled", renderSettingsData.skyEnabled);
+    compositeShader.setFloat("timeOfDay", renderSettingsData.timeOfDay);
 
     glDispatchCompute(workGroupsX, workGroupsY, 1);
     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);

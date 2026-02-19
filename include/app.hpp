@@ -101,9 +101,6 @@ private:
 
     // UI State
     bool settingsOpen = false;
-    bool isDayMode = true;
-    float dayAmbient = 0.65f;
-    float nightAmbient = -0.65f;
 
     // Logic
     Registry registry;

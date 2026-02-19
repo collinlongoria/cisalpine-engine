@@ -2,6 +2,27 @@
 layout(local_size_x = 16, local_size_y = 16) in;
 
 layout(rgba16f, binding = 0) uniform image2D forceMap;
+layout(rgba8ui, binding = 1) uniform readonly uimage2D stateIn;
+
+struct ElementData {
+    vec4 color;
+    int type;
+    float density;
+    float viscosity;
+    float probability;
+    int flammability;
+    int glow;
+    int maxLife;
+    int gemstone;
+    float lightRadius;
+    float lightIntensity;
+    float ior;
+    int _pad;
+};
+
+layout(std430, binding = 2) buffer ElementRegistry {
+    ElementData elements[];
+};
 
 uniform int brushX;
 uniform int brushY;
@@ -28,15 +49,42 @@ void main() {
     float falloff = 1.0 - (dist / float(brushSize));
     falloff = falloff * falloff; // Quadratic falloff for softer edges
 
+    // Read element at this position to determine force multiplier
+    uvec4 state = imageLoad(stateIn, pos);
+    uint elem = state.r;
+
+    float forceMultiplier = 1.0;
+
+    if (elem < MAX_ELEMENTS && elem != EMPTY) {
+        int type = elements[elem].type;
+
+        // Static elements
+        if (type == 0) {
+            forceMultiplier = 3.0;
+        }
+        // Granular elements
+        else if (type == 1) {
+            forceMultiplier = 2.0;
+        }
+        // Liquids
+        else if (type == 2) {
+            forceMultiplier = 1.5;
+        }
+        // Gas
+        else {
+            forceMultiplier = 1.0;
+        }
+    }
+
     // Read existing force and add wind
     vec4 existing = imageLoad(forceMap, pos);
-    vec2 windForce = vec2(forceX, forceY) * strength * falloff;
+    vec2 windForce = vec2(forceX, forceY) * strength * falloff * forceMultiplier;
 
-    // Accumulate force (don't replace, add to existing)
+    // Accumulate force
     vec2 newForce = existing.rg + windForce;
 
     // Clamp to prevent runaway forces
-    float maxForce = 20.0;
+    float maxForce = 25.0;
     if (length(newForce) > maxForce) {
         newForce = normalize(newForce) * maxForce;
     }
