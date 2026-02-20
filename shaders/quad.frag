@@ -4,6 +4,8 @@ in vec2 TexCoord;
 out vec4 FragColor;
 
 uniform sampler2D displayTex;
+uniform sampler2D physicsTex;
+uniform sampler2D normalTex;
 uniform vec4 uvBounds;
 
 void main() {

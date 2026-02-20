@@ -386,6 +386,12 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
     glActiveTexture(GL_TEXTURE0);
     glBindTexture(GL_TEXTURE_2D, displayTexture);
     quadShader.setInt("displayTex", 0);
+    glActiveTexture(GL_TEXTURE1);
+    glBindTexture(GL_TEXTURE_2D, getCurrentForceTexture());
+    quadShader.setInt("physicsTex", 1);
+    glActiveTexture(GL_TEXTURE2);
+    glBindTexture(GL_TEXTURE_2D, normalTexture);
+    quadShader.setInt("normalTex", 2);
 
     // Pass UV range as uniforms for camera
     quadShader.setVec4("uvBounds", uMin, vMin, uMax, vMax);

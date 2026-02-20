@@ -1,0 +1,33 @@
+Engine Features:
+- Debug views
+- Compute/Rendering pipeline debug info
+- Element scripting (with shader injection)
+- Improved item selection window w/ search
+- General UI improvements
+- Web build (emscripten, webgl/wgpu?)
+
+Simulation Features:
+- Temperature layer for more accurate heat/cold interactions (Similar buffer to physics layer)
+^ this will allow for interactions beyond say, metal -> lava. Metal may have behaviors for being beyond 'melting point'
+
+Rendering Features:
+- Radiance Cascades for lighting
+
+Elements:
+- Colored lights
+- Flowers
+- Bee & Honeycomb
+- Objects (loaded in via sprites in assets folder)
+- Ice
+- Cloud
+- Duplicator
+- Fan (should be able to change direction)
+- Lightning
+- Wire
+- Battery (just provides electricity)
+- Electricity
+- Metal < depending on amount of implemented behavior data, can extend to different metals
+
+Known issues:
+- Dragging mouse does not behave properly
+- Diagonal interactions in some cases are still an issue
