@@ -1,0 +1,49 @@
+#version 460 core
+
+layout(local_size_x = 64) in;
+
+// Chunk grid (current frame)
+layout(std430, binding = 4) buffer ChunkGridRead {
+    uint chunkGridRead[];
+};
+
+// Chunk grid (next frame)
+layout(std430, binding = 5) buffer ChunkGridWrite {
+    uint chunkGridWrite[];
+};
+
+// Active chunk list with indirect dispatch header
+// [0] = num_groups_x (atomic counter)
+// [1] = num_groups_y (always 1)
+// [2] = num_groups_z (always 1)
+// [3..] = packed active chunk IDs
+layout(std430, binding = 6) buffer ActiveChunkList {
+    uint num_groups_x;
+    uint num_groups_y;
+    uint num_groups_z;
+    uint active_chunk_ids[];
+};
+
+void main() {
+    uint chunkId = gl_GlobalInvocationID.x;
+    if (chunkId >= TOTAL_CHUNKS) return;
+
+    // Read the wake flag for this chunk
+    uint awake = chunkGridRead[chunkId];
+
+    // Reset the next-frame grid entry to 0
+    chunkGridWrite[chunkId] = 0u;
+
+    if (awake != 0u) {
+        // Atomically append this chunk ID to the active list
+        uint slot = atomicAdd(num_groups_x, 1u);
+        active_chunk_ids[slot] = chunkId;
+    }
+
+    // Ensure dispatch y and z are always 1
+    // (Only need one thread to do this, but it's harmless for all to write)
+    if (chunkId == 0u) {
+        num_groups_y = 1u;
+        num_groups_z = 1u;
+    }
+}

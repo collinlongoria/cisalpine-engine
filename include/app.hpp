@@ -101,6 +101,15 @@ private:
 
     // UI State
     bool settingsOpen = false;
+    bool showChunkDebug = false;
+
+    // Debug overlay state
+    bool debugOverlayOpen = false;
+    bool lastTildePressed = false;
+    DebugViewMode debugViewMode = DebugViewMode::Final;
+    float chunkMapRefreshTimer = 0.0f;
+    static constexpr float CHUNK_MAP_REFRESH_INTERVAL = 0.1f; // refresh every 100ms
+    std::vector<uint32_t> cachedChunkGrid;
 
     // Logic
     Registry registry;
@@ -112,6 +121,7 @@ private:
     void handleInput(float dt);
     void renderUI();
     void renderSettingsWindow();
+    void renderDebugOverlay(float dt);
 
     // Convert screen coords to world coords
     bool screenToWorld(double screenX, double screenY, int& worldX, int& worldY);

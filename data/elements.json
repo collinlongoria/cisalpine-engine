@@ -212,5 +212,19 @@
     "glow": true,
     "lightRadius": 12,
     "lightIntensity": 0.3
+  },
+  "WoodTip": {
+    "id": 24,
+    "color": [0.45, 0.28, 0.15, 1.0],
+    "type": "Static",
+    "density": 10.0,
+    "singleClick": false
+  },
+  "LeafTip": {
+    "id": 25,
+    "color": [0.2, 0.65, 0.15, 1.0],
+    "type": "Static",
+    "density": 10.0,
+    "singleClick": false
   }
 }

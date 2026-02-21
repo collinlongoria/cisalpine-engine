@@ -179,6 +179,13 @@ bool App::screenToWorld(double screenX, double screenY, int& worldX, int& worldY
 void App::handleInput(float dt) {
     ImGuiIO& io = ImGui::GetIO();
 
+    // Tilde key toggle for debug overlay
+    bool tildePressed = glfwGetKey(window, GLFW_KEY_GRAVE_ACCENT) == GLFW_PRESS;
+    if (tildePressed && !lastTildePressed) {
+        debugOverlayOpen = !debugOverlayOpen;
+    }
+    lastTildePressed = tildePressed;
+
     // Allow panning even if ImGui has keyboard focus for text input,
     // but not if settings window is open
     if (!settingsOpen) {
@@ -259,6 +266,11 @@ void App::handleInput(float dt) {
                     int groups = (brushSize * 2 + 16) / 16;
                     physicsBrushShader.dispatch(groups, groups, 1);
                     glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+                    // Wake chunks in the brush area
+                    world->wakeChunkAt(worldX, worldY);
+                    world->wakeChunkAt(worldX - brushSize, worldY - brushSize);
+                    world->wakeChunkAt(worldX + brushSize, worldY + brushSize);
                 }
             }
 
@@ -320,6 +332,11 @@ void App::handleInput(float dt) {
             brushShader.dispatch(groups, groups, 1);
             glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
 
+            // Wake chunks in the brush area so simulation picks up new elements
+            world->wakeChunkAt(worldX, worldY);
+            world->wakeChunkAt(worldX - effectiveBrushSize, worldY - effectiveBrushSize);
+            world->wakeChunkAt(worldX + effectiveBrushSize, worldY + effectiveBrushSize);
+
             isDrawing = true;
         }
     } else {
@@ -357,18 +374,23 @@ void App::renderSettingsWindow() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ─── Simulation ───
+    // Simulation
     ImGui::Text("Simulation");
     ImGui::Spacing();
 
     SimulationSettings& simSettings = world->simulationSettings();
     ImGui::SliderInt("Sim Speed", &simSettings.stepsPerFrame, 1, 10);
+    ImGui::Checkbox("Chunk Sleep", &simSettings.chunkSleepEnabled);
+    if (simSettings.chunkSleepEnabled) {
+        ImGui::Text("Chunks: %d/%d active", world->getActiveChunkCount(), world->getTotalChunks());
+        ImGui::Text("Grid: %dx%d", world->getChunkGridWidth(), world->getChunkGridHeight());
+    }
 
     ImGui::Spacing();
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ─── Rendering ───
+    // Rendering
     ImGui::Text("Rendering");
     ImGui::Spacing();
 
@@ -413,7 +435,7 @@ void App::renderSettingsWindow() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ─── Camera ───
+    // Camera
     ImGui::Text("Camera");
     ImGui::Spacing();
     ImGui::Text("Zoom: %.1fx", camera.zoom);
@@ -428,7 +450,7 @@ void App::renderSettingsWindow() {
     ImGui::Separator();
     ImGui::Spacing();
 
-    // ─── Close Button ───
+    // Close Button
     float buttonWidth = 120.0f;
     ImGui::SetCursorPosX((contentWidth - buttonWidth) * 0.5f);
     if (ImGui::Button("Close", ImVec2(buttonWidth, 32.0f))) {
@@ -442,6 +464,182 @@ void App::renderSettingsWindow() {
 
     ImGui::EndChild();
     ImGui::End();
+}
+
+void App::renderDebugOverlay(float dt) {
+    if (!debugOverlayOpen) return;
+
+    ImGui::SetNextWindowPos(ImVec2(8, 8), ImGuiCond_FirstUseEver);
+    ImGui::SetNextWindowSize(ImVec2(340, 520), ImGuiCond_FirstUseEver);
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoCollapse;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.05f, 0.05f, 0.08f, 0.92f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBg, ImVec4(0.12f, 0.12f, 0.18f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_TitleBgActive, ImVec4(0.18f, 0.18f, 0.28f, 1.0f));
+
+    if (ImGui::Begin("Debug [~]", &debugOverlayOpen, flags)) {
+
+        // GPU Info
+        if (ImGui::CollapsingHeader("GPU Info", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Text("Renderer: %s", glGetString(GL_RENDERER));
+            ImGui::Text("Vendor:   %s", glGetString(GL_VENDOR));
+            ImGui::Text("OpenGL:   %s", glGetString(GL_VERSION));
+            ImGui::Text("GLSL:     %s", glGetString(GL_SHADING_LANGUAGE_VERSION));
+
+            // Query some GPU limits
+            GLint maxWorkGroupCount[3], maxWorkGroupSize[3], maxComputeInvocations;
+            glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 0, &maxWorkGroupCount[0]);
+            glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_COUNT, 1, &maxWorkGroupCount[1]);
+            glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 0, &maxWorkGroupSize[0]);
+            glGetIntegeri_v(GL_MAX_COMPUTE_WORK_GROUP_SIZE, 1, &maxWorkGroupSize[1]);
+            glGetIntegerv(GL_MAX_COMPUTE_WORK_GROUP_INVOCATIONS, &maxComputeInvocations);
+
+            GLint maxTextureSize, maxSSBOSize;
+            glGetIntegerv(GL_MAX_TEXTURE_SIZE, &maxTextureSize);
+            glGetIntegerv(GL_MAX_SHADER_STORAGE_BLOCK_SIZE, &maxSSBOSize);
+
+            ImGui::Text("Max Tex:  %d", maxTextureSize);
+            ImGui::Text("Max SSBO: %d MB", maxSSBOSize / (1024 * 1024));
+            ImGui::Text("Max WG:   %dx%d (%d inv)",
+                maxWorkGroupSize[0], maxWorkGroupSize[1], maxComputeInvocations);
+        }
+
+        // Pass Timings
+        if (ImGui::CollapsingHeader("GPU Pass Timings", ImGuiTreeNodeFlags_DefaultOpen)) {
+            float totalMs = world->getTotalGPUTimeMs();
+            ImGui::Text("Total GPU: %.2f ms", totalMs);
+            ImGui::Separator();
+
+            // Timing bars
+            float maxBarMs = 2.0f; // Scale: 2ms = full bar width
+            float availWidth = ImGui::GetContentRegionAvail().x;
+
+            for (int i = 0; i < TIMER_COUNT; i++) {
+                const GPUTimerQuery& timer = world->getTimer(i);
+                float ms = timer.averageMs;
+
+                // Color based on time: green < 0.5ms, yellow < 1ms, red > 1ms
+                ImVec4 barColor;
+                if (ms < 0.3f)       barColor = ImVec4(0.2f, 0.8f, 0.3f, 0.8f);
+                else if (ms < 0.7f)  barColor = ImVec4(0.8f, 0.8f, 0.2f, 0.8f);
+                else                 barColor = ImVec4(0.9f, 0.3f, 0.2f, 0.8f);
+
+                float fraction = ms / maxBarMs;
+                if (fraction > 1.0f) fraction = 1.0f;
+
+                // Draw label + bar
+                ImGui::Text("%-14s", gpuTimerName(i));
+                ImGui::SameLine(120);
+                ImGui::PushStyleColor(ImGuiCol_PlotHistogram, barColor);
+
+                char overlay[32];
+                snprintf(overlay, sizeof(overlay), "%.3f ms", ms);
+                ImGui::ProgressBar(fraction, ImVec2(availWidth - 130, 14), overlay);
+                ImGui::PopStyleColor();
+            }
+        }
+
+        // View Mode
+        if (ImGui::CollapsingHeader("View Mode", ImGuiTreeNodeFlags_DefaultOpen)) {
+            ImGui::Text("Current: %s", debugViewModeName(debugViewMode));
+            ImGui::Spacing();
+
+            float btnW = 95.0f;
+            for (int i = 0; i < static_cast<int>(DebugViewMode::COUNT); i++) {
+                DebugViewMode mode = static_cast<DebugViewMode>(i);
+                bool isActive = (debugViewMode == mode);
+
+                if (isActive) {
+                    ImGui::PushStyleColor(ImGuiCol_Button, ImVec4(0.3f, 0.5f, 0.8f, 1.0f));
+                    ImGui::PushStyleColor(ImGuiCol_ButtonHovered, ImVec4(0.4f, 0.6f, 0.9f, 1.0f));
+                }
+
+                if (ImGui::Button(debugViewModeName(mode), ImVec2(btnW, 0))) {
+                    debugViewMode = mode;
+                }
+
+                if (isActive) {
+                    ImGui::PopStyleColor(2);
+                }
+
+                // 3 buttons per row
+                if ((i % 3) != 2 && i + 1 < static_cast<int>(DebugViewMode::COUNT)) {
+                    ImGui::SameLine();
+                }
+            }
+        }
+
+        // Chunk Map
+        if (ImGui::CollapsingHeader("Chunk Activity Map")) {
+            int gridW = world->getChunkGridWidth();
+            int gridH = world->getChunkGridHeight();
+
+            ImGui::Text("Grid: %dx%d  Active: %d/%d",
+                gridW, gridH, world->getActiveChunkCount(), world->getTotalChunks());
+
+            // Rate-limit the GPU readback
+            chunkMapRefreshTimer -= dt;
+            if (chunkMapRefreshTimer <= 0.0f) {
+                cachedChunkGrid = world->readChunkGrid();
+                chunkMapRefreshTimer = CHUNK_MAP_REFRESH_INTERVAL;
+            }
+
+            if (!cachedChunkGrid.empty()) {
+                // Draw ASCII-style chunk map using ImGui drawing
+                // Each chunk = a small colored square
+                float cellSize = 6.0f;
+
+                // Limit display size - if grid is very large, shrink cells
+                float maxDisplayWidth = ImGui::GetContentRegionAvail().x - 4.0f;
+                if (gridW * cellSize > maxDisplayWidth) {
+                    cellSize = maxDisplayWidth / static_cast<float>(gridW);
+                    if (cellSize < 2.0f) cellSize = 2.0f;
+                }
+
+                ImVec2 origin = ImGui::GetCursorScreenPos();
+                ImDrawList* drawList = ImGui::GetWindowDrawList();
+
+                for (int y = 0; y < gridH; y++) {
+                    for (int x = 0; x < gridW; x++) {
+                        // Flip Y so bottom of world is at bottom of display
+                        int flippedY = gridH - 1 - y;
+                        int idx = flippedY * gridW + x;
+
+                        bool awake = (idx < static_cast<int>(cachedChunkGrid.size())) && (cachedChunkGrid[idx] != 0);
+
+                        ImU32 color = awake
+                            ? IM_COL32(60, 200, 80, 220)   // Green = active
+                            : IM_COL32(30, 30, 40, 180);   // Dark = sleeping
+
+                        float px = origin.x + x * cellSize;
+                        float py = origin.y + y * cellSize;
+
+                        drawList->AddRectFilled(
+                            ImVec2(px, py),
+                            ImVec2(px + cellSize - 1.0f, py + cellSize - 1.0f),
+                            color
+                        );
+                    }
+                }
+
+                // Reserve space for the drawn grid
+                ImGui::Dummy(ImVec2(gridW * cellSize, gridH * cellSize));
+            }
+        }
+
+        // Frame Stats
+        if (ImGui::CollapsingHeader("Frame Stats")) {
+            ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
+            ImGui::Text("Frame time: %.2f ms", 1000.0f / ImGui::GetIO().Framerate);
+            ImGui::Text("World: %dx%d", worldWidth, worldHeight);
+            ImGui::Text("Sim steps/frame: %d", world->simulationSettings().stepsPerFrame);
+            ImGui::Text("Chunk sleep: %s", world->simulationSettings().chunkSleepEnabled ? "ON" : "OFF");
+        }
+    }
+    ImGui::End();
+
+    ImGui::PopStyleColor(3);
 }
 
 void App::renderUI() {
@@ -471,6 +669,9 @@ void App::renderUI() {
     ImGui::Text("World: %dx%d", worldWidth, worldHeight);
     ImGui::Text("FPS: %.1f", ImGui::GetIO().Framerate);
     ImGui::Text("Zoom: %.1fx", camera.zoom);
+    if (world->simulationSettings().chunkSleepEnabled) {
+        ImGui::Text("Chunks: %d/%d", world->getActiveChunkCount(), world->getTotalChunks());
+    }
 
     // ELEMENTS - Data-driven from registry
     ImGui::Separator();
@@ -626,6 +827,7 @@ void App::renderUI() {
     ImGui::BulletText("RMB: Erase");
     ImGui::BulletText("WASD: Pan");
     ImGui::BulletText("Scroll: Zoom");
+    ImGui::BulletText("~: Debug Panel");
 
     ImGui::Separator();
     const char* selectedName = (selectedElementId == 0) ? "Eraser"
@@ -663,6 +865,7 @@ void App::run() {
         ImGui::NewFrame();
 
         renderUI();
+        renderDebugOverlay(dt);
 
         // Render
         ImGui::Render();
@@ -679,7 +882,7 @@ void App::run() {
         float camCenterY = static_cast<float>(worldHeight) * 0.5f + camera.panY;
         world->render(layout.viewportX, layout.viewportY,
                       layout.viewportWidth, layout.viewportHeight,
-                      camCenterX, camCenterY, camera.zoom);
+                      camCenterX, camCenterY, camera.zoom, debugViewMode);
 
         // Render ImGui on top
         ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());

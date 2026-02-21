@@ -1,6 +1,6 @@
 #version 460 core
 
-layout(local_size_x = 16, local_size_y = 16) in;
+layout(local_size_x = 32, local_size_y = 32) in;
 
 layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8ui, binding = 1) uniform writeonly uimage2D stateOut;
@@ -26,9 +26,29 @@ layout(std430, binding = 2) buffer ElementRegistry {
     ElementData elements[];
 };
 
+// === Chunk Sleep System SSBOs ===
+// binding 4: chunk grid read (this frame's wake state)
+layout(std430, binding = 4) buffer ChunkGridRead {
+    uint chunkGridRead[];
+};
+
+// binding 5: chunk grid write (next frame's wake state - sim writes here)
+layout(std430, binding = 5) buffer ChunkGridWrite {
+    uint chunkGridWrite[];
+};
+
+// binding 6: active chunk list + indirect dispatch header
+layout(std430, binding = 6) buffer ActiveChunkList {
+    uint num_groups_x;
+    uint num_groups_y;
+    uint num_groups_z;
+    uint active_chunk_ids[];
+};
+
 uniform vec2  worldSize;
 uniform float time;
 uniform uint  frameCount;
+uniform bool  useChunkSleep;
 
 // Type constants
 const int TYPE_STATIC   = 0;
@@ -40,7 +60,63 @@ const int TYPE_GAS      = 3;
 const uint BOMB_FUSE_TICKS  = 250u;
 const float BOMB_DESTROY_RADIUS = 12.0;
 
-// Helpers
+// Boundary margin for chunk waking (pixels from edge that trigger neighbor wake)
+const int CHUNK_WAKE_MARGIN = 2;
+
+// === Chunk Wake Helper ===
+
+void wakeChunk(ivec2 pixelPos) {
+    if (!useChunkSleep) return;
+    if (pixelPos.x < 0 || pixelPos.x >= int(worldSize.x) ||
+        pixelPos.y < 0 || pixelPos.y >= int(worldSize.y)) return;
+
+    int cx = pixelPos.x / CHUNK_SIZE;
+    int cy = pixelPos.y / CHUNK_SIZE;
+    uint idx = uint(cy * CHUNK_GRID_W + cx);
+    chunkGridWrite[idx] = 1u;
+}
+
+// Wake the chunk containing pos, plus neighbors if pos is near the edge
+void wakeChunkAndNeighbors(ivec2 pos) {
+    wakeChunk(pos);
+
+    if (!useChunkSleep) return;
+
+    int localX = pos.x % CHUNK_SIZE;
+    int localY = pos.y % CHUNK_SIZE;
+
+    // If near left edge of chunk, wake left neighbor
+    if (localX < CHUNK_WAKE_MARGIN) {
+        wakeChunk(pos + ivec2(-CHUNK_SIZE, 0));
+    }
+    // If near right edge, wake right neighbor
+    if (localX >= CHUNK_SIZE - CHUNK_WAKE_MARGIN) {
+        wakeChunk(pos + ivec2(CHUNK_SIZE, 0));
+    }
+    // If near bottom edge, wake below neighbor
+    if (localY < CHUNK_WAKE_MARGIN) {
+        wakeChunk(pos + ivec2(0, -CHUNK_SIZE));
+    }
+    // If near top edge, wake above neighbor
+    if (localY >= CHUNK_SIZE - CHUNK_WAKE_MARGIN) {
+        wakeChunk(pos + ivec2(0, CHUNK_SIZE));
+    }
+    // Corners
+    if (localX < CHUNK_WAKE_MARGIN && localY < CHUNK_WAKE_MARGIN) {
+        wakeChunk(pos + ivec2(-CHUNK_SIZE, -CHUNK_SIZE));
+    }
+    if (localX >= CHUNK_SIZE - CHUNK_WAKE_MARGIN && localY < CHUNK_WAKE_MARGIN) {
+        wakeChunk(pos + ivec2(CHUNK_SIZE, -CHUNK_SIZE));
+    }
+    if (localX < CHUNK_WAKE_MARGIN && localY >= CHUNK_SIZE - CHUNK_WAKE_MARGIN) {
+        wakeChunk(pos + ivec2(-CHUNK_SIZE, CHUNK_SIZE));
+    }
+    if (localX >= CHUNK_SIZE - CHUNK_WAKE_MARGIN && localY >= CHUNK_SIZE - CHUNK_WAKE_MARGIN) {
+        wakeChunk(pos + ivec2(CHUNK_SIZE, CHUNK_SIZE));
+    }
+}
+
+// === Standard Helpers ===
 
 bool inBounds(ivec2 p) {
     return (p.x >= 0 && p.x < int(worldSize.x) &&
@@ -334,8 +410,6 @@ bool sourceProposesTo(ivec2 src, ivec2 dest) {
         if (destState.r == SAPLING && destState.b > 0u) return false;
     }
 
-    //if (isDoomed(dest)) return false;
-
     uint e = getElement(src);
     if (e == EMPTY) return false;
 
@@ -380,9 +454,7 @@ ivec2 pickWinnerForDest(ivec2 dest) {
     return found ? best : ivec2(999999);
 }
 
-// Sapling Tree Growth
-const int MAX_TREE_HEIGHT = 25;
-const int MAX_TREE_SPREAD = 8;
+// === Active CA State Machine: Local-Gather Tree Growth ===
 
 bool isTouchingSoil(ivec2 pos) {
     for (int dy = -1; dy <= 1; dy++) {
@@ -398,155 +470,149 @@ bool isTouchingSoil(ivec2 pos) {
     return false;
 }
 
-uint treeElementAt(ivec2 saplingPos, ivec2 queryPos, uint targetHeight, uint growthStep) {
-    int rx = queryPos.x - saplingPos.x;
-    int ry = queryPos.y - saplingPos.y;
+// ---------------------------------------------------------------
+// Local-Gather Tree State Machine
+//
+// SAPLING (growthStep=0, on soil) → initializes, stores target height in G,
+//   sets B=1 to begin growth. Each frame it increments B until B >= G,
+//   then becomes WOOD.
+//
+// WOODTIP: A transient element that moves upward one pixel per frame.
+//   State channels: R=WOODTIP, G=energy (remaining height), B=branch seed, A=flags
+//   - The tip itself solidifies into WOOD each frame.
+//   - Empty cells above it "pull" the tip state (local gather).
+//
+// LEAFTIP: Spreads outward to form canopy. Energy decreases each step.
+//   R=LEAFTIP, G=energy, B=direction seed, A=0
+//   - Solidifies into PLANT each frame.
+//   - Empty neighbors pull the tip state.
+// ---------------------------------------------------------------
 
-    if (ry < 0) return EMPTY;
+// Check if this EMPTY cell should become a WOODTIP by pulling from a neighbor
+bool tryPullWoodTip(ivec2 pos, out uvec4 newState) {
+    // Check the cell directly below us
+    ivec2 below = pos + ivec2(0, -1);
+    if (!inBounds(below)) return false;
 
-    uint treeSeed = hash2u(uvec2(saplingPos));
+    uvec4 belowState = getState(below);
 
-    // Trunk
-    if (rx == 0 && ry >= 1 && uint(ry) <= targetHeight) {
-        if (uint(ry) <= growthStep) {
-            return WOOD;
-        }
-        return EMPTY;
-    }
+    // Pull from WOODTIP below (tip moving upward)
+    if (belowState.r == WOODTIP) {
+        uint energy = belowState.g;
+        uint branchSeed = belowState.b;
 
-    // Branches
-    uint branchStartY = 4u;
-    for (uint trunkY = branchStartY; trunkY <= targetHeight && trunkY <= growthStep; trunkY++) {
-        uint branchSeed = hash3u(uvec2(saplingPos), trunkY * 37u);
-        float branchRoll = float(branchSeed & 0xFFFFu) / 65535.0;
-
-        float heightRatio = float(trunkY) / float(targetHeight);
-        float branchChance = 0.0;
-        if (heightRatio < 0.85) {
-            float midFactor = 1.0 - abs(heightRatio - 0.55) * 2.5;
-            branchChance = clamp(midFactor * 0.7, 0.15, 0.65);
-        }
-
-        if (branchRoll >= branchChance) continue;
-
-        bool goLeft = (branchSeed & 0x10000u) != 0u;
-        int dir = goLeft ? -1 : 1;
-
-        float midBonus = 1.0 - abs(heightRatio - 0.5) * 2.0;
-        uint maxLen = uint(clamp(midBonus * 4.0 + 2.0, 2.0, 5.0));
-        uint branchLen = (hash3u(uvec2(saplingPos), trunkY * 53u + 7u) % maxLen) + 1u;
-
-        for (uint b = 1u; b <= branchLen; b++) {
-            ivec2 bp = ivec2(saplingPos.x + int(b) * dir, saplingPos.y + int(trunkY));
-            if (b > 2u) bp.y += 1;
-
-            if (queryPos == bp) {
-                return WOOD;
-            }
-
-            if (b >= branchLen - 1u) {
-                int ldx = queryPos.x - bp.x;
-                int ldy = queryPos.y - bp.y;
-                if (abs(ldx) <= 2 && ldy >= -1 && ldy <= 2) {
-                    if (abs(ldx) + abs(ldy) <= 3) {
-                        float leafRoll = float(hash3u(uvec2(queryPos), trunkY * 71u + 200u) & 0xFFFFu) / 65535.0;
-                        if (leafRoll < 0.55) {
-                            return PLANT;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    // Top canopy
-    if (growthStep >= targetHeight - 2u) {
-        int canopyRadius = int(targetHeight) / 4 + 2;
-        ivec2 canopyCenter = ivec2(saplingPos.x, saplingPos.y + int(targetHeight));
-        int cdx = queryPos.x - canopyCenter.x;
-        int cdy = queryPos.y - canopyCenter.y;
-
-        if (abs(cdx) <= canopyRadius && cdy >= -1 && cdy <= canopyRadius + 1) {
-            float dist = sqrt(float(cdx*cdx + cdy*cdy));
-            if (dist <= float(canopyRadius) + 0.5) {
-                float leafRoll = float(hash3u(uvec2(queryPos), targetHeight * 97u + 500u) & 0xFFFFu) / 65535.0;
-                float noise = float(hash3u(uvec2(queryPos), 999u) & 0xFFu) / 255.0;
-                if (leafRoll < 0.55 && noise > 0.25) {
-                    if (!(cdx == 0 && cdy <= 0)) {
-                        return PLANT;
-                    }
-                }
-            }
-        }
-    }
-
-    return EMPTY;
-}
-
-bool isPossibleTreeZone(ivec2 pos) {
-    // Fast strided raycast downward.
-    // Trees max out around 28 pixels (MAX_TREE_HEIGHT + 3).
-    // We stride by 4 to jump quickly through empty space.
-    for (int dy = 1; dy <= 32; dy += 4) {
-        // Check the center, and the max horizontal spread limits
-        uint eC = getElement(pos + ivec2(0, -dy));
-        uint eL = getElement(pos + ivec2(-MAX_TREE_SPREAD, -dy));
-        uint eR = getElement(pos + ivec2(MAX_TREE_SPREAD, -dy));
-
-        // If we hit anything solid (dirt, existing wood, etc.), we are in a potential growth zone
-        if ((eC != EMPTY && eC != SMOKE) ||
-            (eL != EMPTY && eL != SMOKE) ||
-            (eR != EMPTY && eR != SMOKE)) {
+        if (energy > 0u) {
+            // Continue growing upward - become the new tip
+            newState = uvec4(WOODTIP, energy - 1u, branchSeed, 0u);
+            return true;
+        } else {
+            // Energy exhausted - become a leaf tip to start canopy
+            newState = uvec4(LEAFTIP, 8u, branchSeed, 0u);
             return true;
         }
     }
+
+    // Pull from SAPLING that just initialized (growthStep >= 1)
+    if (belowState.r == SAPLING && belowState.b >= 1u) {
+        uint targetHeight = belowState.g;
+        uint growthStep = belowState.b;
+
+        // Only the cell directly above the sapling pulls
+        if (growthStep == 1u) {
+            uint seed = hash2u(uvec2(below));
+            newState = uvec4(WOODTIP, targetHeight - 1u, seed & 0xFFu, 0u);
+            return true;
+        }
+    }
+
     return false;
 }
 
-uint checkTreeClaim(ivec2 pos) {
-    for (int dy = 1; dy <= MAX_TREE_HEIGHT; dy++) {
-        ivec2 candidatePos = pos + ivec2(0, -dy);
-        if (!inBounds(candidatePos)) break;
+// Check if this EMPTY cell should become a branch WOODTIP or LEAFTIP
+bool tryPullBranch(ivec2 pos, out uvec4 newState) {
+    // Check diagonal-below neighbors for branching tips
+    for (int dx = -1; dx <= 1; dx += 2) {
+        ivec2 diagBelow = pos + ivec2(dx, -1);
+        if (!inBounds(diagBelow)) continue;
 
-        uvec4 candidateState = getState(candidatePos);
-        if (candidateState.r != SAPLING) continue;
+        uvec4 nState = getState(diagBelow);
+        if (nState.r != WOODTIP) continue;
 
-        uint growthStep = candidateState.b;
-        if (growthStep == 0u) continue;
+        uint energy = nState.g;
+        uint branchSeed = nState.b;
 
-        uint targetHeight = candidateState.g;
+        // Roll for branch chance based on energy (mid-trunk branches most)
+        float branchRoll = float(hash3u(uvec2(diagBelow), frameCount * 37u + uint(dx)) & 0xFFFFu) / 65535.0;
 
-        if (uint(dy) <= growthStep && uint(dy) <= targetHeight) {
-            return WOOD;
+        // Branch more in the middle of growth
+        float energyRatio = float(energy) / 25.0; // normalized rough estimate
+        float branchChance = 0.0;
+        if (energyRatio > 0.15 && energyRatio < 0.85) {
+            float midFactor = 1.0 - abs(energyRatio - 0.5) * 2.5;
+            branchChance = clamp(midFactor * 0.25, 0.05, 0.20);
         }
 
-        uint result = treeElementAt(candidatePos, pos, targetHeight, growthStep);
-        if (result != EMPTY) return result;
-    }
-
-    for (int dx = -MAX_TREE_SPREAD; dx <= MAX_TREE_SPREAD; dx++) {
-        if (dx == 0) continue;
-        for (int dy = 0; dy <= MAX_TREE_HEIGHT + 3; dy++) {
-            ivec2 candidatePos = pos + ivec2(dx, -dy);
-            if (!inBounds(candidatePos)) continue;
-
-            uvec4 candidateState = getState(candidatePos);
-            if (candidateState.r != SAPLING) continue;
-
-            uint growthStep = candidateState.b;
-            if (growthStep == 0u) continue;
-
-            uint targetHeight = candidateState.g;
-            uint result = treeElementAt(candidatePos, pos, targetHeight, growthStep);
-            if (result != EMPTY) return result;
+        if (branchRoll < branchChance && energy > 3u) {
+            // Start a branch (shorter, with leaf energy)
+            uint branchLen = 2u + (hash3u(uvec2(pos), frameCount + 99u) % 3u);
+            newState = uvec4(LEAFTIP, branchLen, branchSeed ^ uint(dx + 2), 0u);
+            return true;
         }
     }
 
-    return EMPTY;
+    return false;
 }
 
+// Check if this EMPTY cell should pull a LEAFTIP from a neighbor
+bool tryPullLeafTip(ivec2 pos, out uvec4 newState) {
+    // Leaf tips spread outward and upward
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+            ivec2 nPos = pos + ivec2(dx, dy);
+            if (!inBounds(nPos)) continue;
+
+            uvec4 nState = getState(nPos);
+            if (nState.r != LEAFTIP) continue;
+
+            uint energy = nState.g;
+            uint dirSeed = nState.b;
+
+            if (energy == 0u) continue;
+
+            // Leaf tips prefer to spread outward/upward
+            // Use dirSeed to determine preferred direction
+            float spreadRoll = float(hash3u(uvec2(pos), frameCount * 71u + uint(dx * 3 + dy)) & 0xFFFFu) / 65535.0;
+
+            // Higher spread chance for upward/sideways, lower for downward
+            float spreadChance = (dy >= 0) ? 0.35 : 0.10;
+
+            if (spreadRoll < spreadChance) {
+                newState = uvec4(LEAFTIP, energy - 1u, dirSeed ^ hash3u(uvec2(pos), 123u), 0u);
+                return true;
+            }
+        }
+    }
+
+    return false;
+}
+
+// ---------------------------------------------------------------
+// main()
+// ---------------------------------------------------------------
+
 void main() {
-    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 pos;
+
+    if (useChunkSleep) {
+        // Derive pixel position from the active chunk list
+        uint chunkId = active_chunk_ids[gl_WorkGroupID.x];
+        ivec2 chunkCoord = ivec2(int(chunkId % CHUNK_GRID_W), int(chunkId / CHUNK_GRID_W));
+        pos = chunkCoord * CHUNK_SIZE + ivec2(gl_LocalInvocationID.xy);
+    } else {
+        pos = ivec2(gl_GlobalInvocationID.xy);
+    }
+
     if (!inBounds(pos)) return;
 
     // Pre-load current state for displacement protection checks
@@ -561,6 +627,8 @@ void main() {
     if (winner.x != 999999 && !isAnchored) {
         uvec4 winState = getState(winner);
         imageStore(stateOut, pos, winState);
+        // Something moved here - wake this chunk for next frame
+        wakeChunkAndNeighbors(pos);
         return; // We have been overwritten. Stop.
     }
 
@@ -578,6 +646,7 @@ void main() {
                 uint neighbor = getElement(pos + ivec2(dx, dy));
                 if (neighbor == VOID) {
                     imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                    wakeChunkAndNeighbors(pos);
                     return;
                 }
             }
@@ -592,6 +661,7 @@ void main() {
                 uint neighbor = getElement(pos + ivec2(dx, dy));
                 if (neighbor == BLACKHOLE) {
                     imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                    wakeChunkAndNeighbors(pos);
                     return;
                 }
             }
@@ -607,6 +677,7 @@ void main() {
         if (flags == 255u) {
             // Bomb center becomes fire
             imageStore(stateOut, pos, uvec4(FIRE, 255u, 0u, 0u));
+            wakeChunkAndNeighbors(pos);
             return;
         }
 
@@ -620,10 +691,17 @@ void main() {
             if (fuse >= BOMB_FUSE_TICKS) {
                 int destroyR = int(BOMB_DESTROY_RADIUS);
                 imageStore(stateOut, pos, uvec4(BOMB, 0u, 255u, 0u));
+                // Wake a large area for the explosion
+                for (int wdy = -1; wdy <= 1; wdy++) {
+                    for (int wdx = -1; wdx <= 1; wdx++) {
+                        wakeChunk(pos + ivec2(wdx * CHUNK_SIZE, wdy * CHUNK_SIZE));
+                    }
+                }
                 return;
             }
 
             imageStore(stateOut, pos, uvec4(BOMB, fuse, 0u, 0u));
+            wakeChunkAndNeighbors(pos);
             return;
         }
     }
@@ -655,6 +733,7 @@ void main() {
                                     imageStore(stateOut, pos, uvec4(SMOKE, 180u, 0u, 0u));
                                 }
                             }
+                            wakeChunkAndNeighbors(pos);
                             return;
                         }
                     }
@@ -681,6 +760,7 @@ void main() {
             float reactRoll = float(hash3u(uvec2(pos), frameCount * 3u + 17u) & 0xFFFFu) / 65535.0;
             if (reactRoll < 0.6) {
                 imageStore(stateOut, pos, uvec4(SMOKE, 200u, 0, 0));
+                wakeChunkAndNeighbors(pos);
                 return;
             }
         }
@@ -699,6 +779,7 @@ void main() {
             float reactRoll = float(hash3u(uvec2(pos), frameCount * 5u + 23u) & 0xFFFFu) / 65535.0;
             if (reactRoll < 0.6) {
                 imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0, 0));
+                wakeChunkAndNeighbors(pos);
                 return;
             }
         }
@@ -720,6 +801,7 @@ void main() {
             float meltRoll = float(hash3u(uvec2(pos), frameCount * 11u + 41u) & 0xFFFFu) / 65535.0;
             if (meltRoll < 0.08) {
                 imageStore(stateOut, pos, uvec4(LAVA, 0u, 0, 0));
+                wakeChunkAndNeighbors(pos);
                 return;
             }
         }
@@ -729,6 +811,7 @@ void main() {
     if (elem == SMOKE) {
         if (life == 0u) {
             imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+            wakeChunkAndNeighbors(pos);
             return;
         }
         uint baseDecay = 3u;
@@ -737,9 +820,12 @@ void main() {
 
         if (life <= totalDecay) {
             imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+            wakeChunkAndNeighbors(pos);
             return;
         }
         cur.g = life - totalDecay;
+        // Smoke is decaying, stay awake
+        wakeChunkAndNeighbors(pos);
     }
 
     // Generic Life Decay
@@ -757,9 +843,11 @@ void main() {
                 deathLife = 0u;
             }
             imageStore(stateOut, pos, uvec4(deathElem, deathLife, 0, 0));
+            wakeChunkAndNeighbors(pos);
             return;
         }
         cur.g = life - decayRate;
+        wakeChunkAndNeighbors(pos);
     }
 
     // FLAMMABILITY
@@ -778,6 +866,7 @@ void main() {
             else {
                 imageStore(stateOut, pos, uvec4(FIRE, 255u, 0, 0));
             }
+            wakeChunkAndNeighbors(pos);
             return;
         }
     }
@@ -803,6 +892,7 @@ void main() {
             }
             if (touchingSoil) {
                 imageStore(stateOut, pos, uvec4(GRASS, 255u, 0, 0));
+                wakeChunkAndNeighbors(pos);
                 return;
             }
         }
@@ -837,6 +927,7 @@ void main() {
                             if (newLife < 30u) newLife = 30u;
 
                             imageStore(stateOut, pos, uvec4(GRASS, newLife, 0, 0));
+                            wakeChunkAndNeighbors(pos);
                             return;
                         }
                     }
@@ -845,39 +936,79 @@ void main() {
         }
     }
 
-    // SAPLING State Machine
+    // === SAPLING State Machine (Local-Gather Version) ===
     if (elem == SAPLING) {
-        uint growthStep = cur.b;
         uint targetHeight = cur.g;
+        uint growthStep = cur.b;
 
         if (growthStep == 0u) {
+            // Phase 0: waiting on soil. Initialize growth.
             if (isTouchingSoil(pos)) {
                 uint treeHeight = hash2u(uvec2(pos)) % 14u + 12u;
                 imageStore(stateOut, pos, uvec4(SAPLING, treeHeight, 1u, 0u));
+                wakeChunkAndNeighbors(pos);
                 return;
             }
         }
         else {
-            if (growthStep >= targetHeight) {
+            // Phase 1+: Sapling stays put, the WOODTIP above us does the growing.
+            // After tip has moved away, sapling becomes wood (the base of the trunk).
+            // Check if there's still a tip directly above
+            ivec2 above = pos + ivec2(0, 1);
+            uvec4 aboveState = getState(above);
+
+            // If the cell above has already pulled our tip, we solidify
+            if (aboveState.r == WOODTIP || aboveState.r == WOOD || growthStep > 1u) {
                 imageStore(stateOut, pos, uvec4(WOOD, 0u, 0u, 0u));
                 return;
             }
-            else {
-                imageStore(stateOut, pos, uvec4(SAPLING, targetHeight, growthStep + 1u, 0u));
-                return;
-            }
+
+            // Keep waiting (tip hasn't been pulled yet)
+            imageStore(stateOut, pos, cur);
+            wakeChunkAndNeighbors(pos);
+            return;
         }
     }
 
-    // TREE CLAIM CHECK
+    // WOODTIP: Solidify into WOOD (the empty cell above us pulls the tip forward)
+    if (elem == WOODTIP) {
+        // The tip's job is done — it solidifies into permanent wood
+        imageStore(stateOut, pos, uvec4(WOOD, 0u, 0u, 0u));
+        // Wake neighbors so the empty cell above can pull next frame
+        wakeChunkAndNeighbors(pos);
+        return;
+    }
+
+    // LEAFTIP: Solidify into PLANT
+    if (elem == LEAFTIP) {
+        imageStore(stateOut, pos, uvec4(PLANT, 255u, 0u, 0u));
+        wakeChunkAndNeighbors(pos);
+        return;
+    }
+
+    // EMPTY CELL: Local-Gather Pulls
     if (elem == EMPTY) {
-        // Only run the search if we are near the ground/existing trees
-        if (isPossibleTreeZone(pos)) {
-            uint claimed = checkTreeClaim(pos);
-            if (claimed != EMPTY) {
-                imageStore(stateOut, pos, uvec4(claimed, 0u, 0u, 0u));
-                return;
-            }
+        uvec4 newState;
+
+        // Priority 1: Pull a WOODTIP from below (trunk growth)
+        if (tryPullWoodTip(pos, newState)) {
+            imageStore(stateOut, pos, newState);
+            wakeChunkAndNeighbors(pos);
+            return;
+        }
+
+        // Priority 2: Pull a branch from diagonal-below tips
+        if (tryPullBranch(pos, newState)) {
+            imageStore(stateOut, pos, newState);
+            wakeChunkAndNeighbors(pos);
+            return;
+        }
+
+        // Priority 3: Pull a LEAFTIP from any neighbor
+        if (tryPullLeafTip(pos, newState)) {
+            imageStore(stateOut, pos, newState);
+            wakeChunkAndNeighbors(pos);
+            return;
         }
     }
 
@@ -921,14 +1052,32 @@ void main() {
                         // mutual diagonal swap prevention
                         if (dispDest == pos) {
                             imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                            wakeChunkAndNeighbors(pos);
                             return;
                         }
                     }
 
                     imageStore(stateOut, pos, displaced);
+                    // We moved - wake both source and destination chunks
+                    wakeChunkAndNeighbors(pos);
+                    wakeChunkAndNeighbors(dest);
                     return;
                 }
             }
+        }
+    }
+
+    // Nothing happened - write current state unchanged
+    if (!isEmpty(elem) && !isStatic(elem)) {
+        if (isGranular(elem)) {
+            // If sand is resting on something it cannot displace, let it sleep
+            ivec2 below = pos + ivec2(0, -1);
+            if (inBounds(below) && canDisplace(elem, getElement(below))) {
+                wakeChunkAndNeighbors(pos); // Still falling
+            }
+        } else {
+            // Liquids, gases, and spreading elements stay awake to evaluate randomness
+            wakeChunkAndNeighbors(pos);
         }
     }
 
