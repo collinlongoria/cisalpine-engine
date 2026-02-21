@@ -17,7 +17,7 @@ int main() {
     cisalpine::App app;
 
     try {
-        app.init(256,256);
+        app.init(512,512);
         app.run();
         app.shutdown();
     }  catch (const std::exception& e) {

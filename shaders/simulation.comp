@@ -334,7 +334,7 @@ bool sourceProposesTo(ivec2 src, ivec2 dest) {
         if (destState.r == SAPLING && destState.b > 0u) return false;
     }
 
-    if (isDoomed(dest)) return false;
+    //if (isDoomed(dest)) return false;
 
     uint e = getElement(src);
     if (e == EMPTY) return false;
@@ -481,6 +481,26 @@ uint treeElementAt(ivec2 saplingPos, ivec2 queryPos, uint targetHeight, uint gro
     }
 
     return EMPTY;
+}
+
+bool isPossibleTreeZone(ivec2 pos) {
+    // Fast strided raycast downward.
+    // Trees max out around 28 pixels (MAX_TREE_HEIGHT + 3).
+    // We stride by 4 to jump quickly through empty space.
+    for (int dy = 1; dy <= 32; dy += 4) {
+        // Check the center, and the max horizontal spread limits
+        uint eC = getElement(pos + ivec2(0, -dy));
+        uint eL = getElement(pos + ivec2(-MAX_TREE_SPREAD, -dy));
+        uint eR = getElement(pos + ivec2(MAX_TREE_SPREAD, -dy));
+
+        // If we hit anything solid (dirt, existing wood, etc.), we are in a potential growth zone
+        if ((eC != EMPTY && eC != SMOKE) ||
+            (eL != EMPTY && eL != SMOKE) ||
+            (eR != EMPTY && eR != SMOKE)) {
+            return true;
+        }
+    }
+    return false;
 }
 
 uint checkTreeClaim(ivec2 pos) {
@@ -851,10 +871,13 @@ void main() {
 
     // TREE CLAIM CHECK
     if (elem == EMPTY) {
-        uint claimed = checkTreeClaim(pos);
-        if (claimed != EMPTY) {
-            imageStore(stateOut, pos, uvec4(claimed, 0u, 0u, 0u));
-            return;
+        // Only run the search if we are near the ground/existing trees
+        if (isPossibleTreeZone(pos)) {
+            uint claimed = checkTreeClaim(pos);
+            if (claimed != EMPTY) {
+                imageStore(stateOut, pos, uvec4(claimed, 0u, 0u, 0u));
+                return;
+            }
         }
     }
 
@@ -882,9 +905,20 @@ void main() {
                     uvec4 displaced = getState(dest);
                     uint dispElem = displaced.r;
 
-                    // mutual diagonal swap prevention
+                    // prevent force-override duplication cascades
                     if (dispElem != EMPTY && !isImmobile(dispElem)) {
                         ivec2 dispDest = desiredDest(dest, dispElem);
+
+                        // If the element we are displacing won a move to somewhere else
+                        if (dispDest != dest) {
+                            ivec2 dispWinner = pickWinnerForDest(dispDest);
+                            if (dispWinner == dest) {
+                                // It moved away successfully! Don't clone it back into our old spot.
+                                displaced = uvec4(EMPTY, 0u, 0u, 0u);
+                            }
+                        }
+
+                        // mutual diagonal swap prevention
                         if (dispDest == pos) {
                             imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
                             return;

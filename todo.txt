@@ -1,5 +1,5 @@
 Engine Features:
-- Debug views
+- Debug views & OpenGL timer queries
 - Compute/Rendering pipeline debug info
 - Element scripting (with shader injection)
 - Improved item selection window w/ search
@@ -31,3 +31,6 @@ Elements:
 Known issues:
 - Dragging mouse does not behave properly
 - Diagonal interactions in some cases are still an issue
+
+Optimizations:
+- Need to implement a chunking system that marks chunks as awake or alseep. Then use glComputeIndirect
