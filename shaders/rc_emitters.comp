@@ -48,17 +48,6 @@ float getOpacity(uint elem) {
     return 0.85;                  // Static / Granular
 }
 
-// Returns the light tint color when light passes through this material
-vec3 getMaterialTint(uint elem) {
-    if (elem == EMPTY || elem >= MAX_ELEMENTS) return vec3(1.0);
-    if (elem == BLACKHOLE) return vec3(0.0);
-    if (elem == VOID) return vec3(0.1, 0.0, 0.15);
-    if (elements[elem].gemstone == 1) return elements[elem].color.rgb;
-    if (elem == WATER) return vec3(0.7, 0.8, 1.0);
-    if (elem == LAVA) return vec3(1.0, 0.6, 0.2);
-    return vec3(1.0);
-}
-
 void main() {
     ivec2 pos  = ivec2(gl_GlobalInvocationID.xy);
     ivec2 size = imageSize(stateIn);
@@ -75,8 +64,6 @@ void main() {
 
         // Light element
         if (elem == LIGHT) {
-            float radius = elements[elem].lightRadius;
-            if (radius <= 0.0) radius = 20.0;
             float intensity = elements[elem].lightIntensity;
             if (intensity <= 0.0) intensity = 1.5;
             emission = vec3(1.0, 0.98, 0.9) * intensity;
@@ -117,8 +104,8 @@ void main() {
     float opacity = getOpacity(elem);
 
     // Pack: RGB = emission, A = opacity
-    // We also encode material tint in a way the cascade shader can reconstruct.
-    // For simplicity, opacity is enough - the cascade shader will handle tinting
-    // during ray marching by reading this texture.
+    // NOTE: Emission and opacity are stored INDEPENDENTLY.
+    // The cascade shader applies emission weighted by visibility during ray marching,
+    // and uses opacity to attenuate visibility. They should NOT be multiplied together here.
     imageStore(radianceField, pos, vec4(emission, opacity));
 }

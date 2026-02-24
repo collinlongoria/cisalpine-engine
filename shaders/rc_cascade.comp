@@ -41,10 +41,7 @@ uniform float time;
 uniform bool skyEnabled;
 uniform float timeOfDay;
 
-// Cascade configuration constants (set via uniform or #define)
-// BASE_RAYS = number of angular rays at cascade 0 (typically 4)
-// Each cascade N has: BASE_RAYS * 2^N angular rays
-// Probe spacing at cascade N: 2^N pixels
+// Cascade configuration constants (set via #define from CPU)
 #ifndef BASE_RAYS
 #define BASE_RAYS 4
 #endif
@@ -54,10 +51,15 @@ uniform float timeOfDay;
 #endif
 
 // Pre-computed offsets into cascadeData for each level
-// Set by CPU at init time
 uniform int cascadeOffsets[MAX_CASCADES];
 uniform int probeCountX[MAX_CASCADES];
 uniform int probeCountY[MAX_CASCADES];
+
+// Base interval length for cascade 0 (in pixels)
+// This controls how far cascade 0 rays reach.
+// Cascade N interval starts at: baseInterval * (1 - 4^N) / (1 - 4)
+//                    and length: baseInterval * 4^N
+const float BASE_INTERVAL = 1.0;
 
 // Helpers
 
@@ -73,6 +75,18 @@ vec3 getMaterialTint(uint elem) {
     if (elem == WATER) return vec3(0.7, 0.8, 1.0);
     if (elem == LAVA) return vec3(1.0, 0.6, 0.2);
     return vec3(1.0);
+}
+
+// Compute interval scale factor using geometric sequence (4x branching)
+// intervalScale(0) = 0, intervalScale(1) = 1, intervalScale(2) = 4, intervalScale(3) = 16, ...
+// So cascade N traces from intervalScale(N) to intervalScale(N+1) in units of BASE_INTERVAL
+float intervalScale(int cascadeIndex) {
+    if (cascadeIndex <= 0) return 0.0;
+    // 4^(cascadeIndex - 1) summed geometrically = (4^cascadeIndex - 1) / 3
+    // But simpler: just use the direct formula
+    // Start = sum of previous lengths = BASE_INTERVAL * (4^0 + 4^1 + ... + 4^(N-1))
+    //       = BASE_INTERVAL * (4^N - 1) / 3
+    return float(uint(1) << (2 * cascadeIndex));  // = 4^cascadeIndex
 }
 
 // Read radiance from a specific cascade level at a probe+ray index
@@ -97,6 +111,12 @@ void writeCascade(int level, int probeX, int probeY, int rayIdx, vec4 value) {
     cascadeData[idx] = value;
 }
 
+// Merge two connected intervals with respect to their visibility term
+// near.a = 1.0 means "no hit" (transparent), 0.0 means "fully occluded"
+vec4 mergeIntervals(vec4 near, vec4 far) {
+    return vec4(near.rgb + far.rgb * near.a, near.a * far.a);
+}
+
 // Bilinear interpolation of cascade N+1 at a world-space position and angle
 vec4 sampleUpperCascade(int upperLevel, vec2 worldPos, float angle) {
     if (upperLevel >= numCascades) return vec4(0.0);
@@ -118,11 +138,10 @@ vec4 sampleUpperCascade(int upperLevel, vec2 worldPos, float angle) {
     float fy = fract(probeCoord.y);
 
     // Angular interpolation
-    // Map angle [0, 2*PI) to ray index in the upper cascade
     float normalizedAngle = angle / (2.0 * 3.14159265);
     if (normalizedAngle < 0.0) normalizedAngle += 1.0;
 
-    // FIX: Subtract 0.5 to correctly align the half-texel ray centers!
+    // Half-texel offset for ray center alignment
     float rayCoord = normalizedAngle * float(upperRays) - 0.5;
     if (rayCoord < 0.0) rayCoord += float(upperRays);
 
@@ -149,6 +168,35 @@ vec4 sampleUpperCascade(int upperLevel, vec2 worldPos, float angle) {
     return mix(interpR0, interpR1, fr);
 }
 
+// Compute sky radiance for a given ray direction
+vec3 getSkyRadiance(vec2 dir) {
+    if (!skyEnabled) return vec3(0.0);
+
+    float sunElevation = sin(timeOfDay * 3.14159);
+
+    // Only inject sky for rays pointing upward
+    // dir.y > 0 means the ray is going upward in world space
+    if (dir.y <= 0.0) return vec3(0.0);
+
+    // Sky color based on time of day
+    vec3 skyLight;
+    if (sunElevation < 0.0) {
+        // Night
+        skyLight = vec3(0.02, 0.02, 0.04);
+    } else if (sunElevation < 0.3) {
+        float t = sunElevation / 0.3;
+        skyLight = mix(vec3(0.05, 0.03, 0.08), vec3(1.0, 0.5, 0.2), t);
+    } else {
+        skyLight = vec3(1.0, 0.98, 0.92);
+    }
+
+    float skyFactor = max(sunElevation, 0.0);
+    // Weight by how upward the ray is pointing (hemisphere cosine weighting)
+    float upFactor = dir.y;
+
+    return skyLight * skyFactor * upFactor * 0.5;
+}
+
 void main() {
     // Each invocation handles one probe+ray pair at the current cascade level
     int N = cascadeLevel;
@@ -171,48 +219,42 @@ void main() {
     int spacing = 1 << N;
     vec2 probeCenter = (vec2(probeX, probeY) + 0.5) * float(spacing);
 
-    // Ray direction: evenly spaced angles
-    // Add a half-step offset for better coverage
+    // Ray direction: evenly spaced angles with half-step offset
     float angleStep = 2.0 * 3.14159265 / float(numRays);
     float angle = angleStep * (float(rayIdx) + 0.5);
     vec2 dir = vec2(cos(angle), sin(angle));
 
-    // Tracing interval for this cascade level
-    // Level N traces from 2^N to 2^(N+1) pixels
-    float rangeStart = float(spacing);          // 2^N
-    float rangeEnd   = float(spacing) * 2.0;    // 2^(N+1)
+    // --- Interval range using geometric sequence (4x branching) ---
+    // Cascade N starts at: BASE_INTERVAL * (4^N - 1) / 3
+    //         ends at:     BASE_INTERVAL * (4^(N+1) - 1) / 3
+    // Length of interval: BASE_INTERVAL * 4^N
+    float scale_start = (N == 0) ? 0.0 : (intervalScale(N) - 1.0) / 3.0;
+    float scale_end   = (intervalScale(N + 1) - 1.0) / 3.0;
+    float rangeStart  = BASE_INTERVAL * scale_start;
+    float rangeEnd    = BASE_INTERVAL * scale_end;
 
-    // For cascade 0, start from 0 (right at the probe)
-    if (N == 0) rangeStart = 0.0;
+    // Clamp maximum range to avoid excessive marching
+    float maxRange = length(vec2(worldSize));
+    rangeEnd = min(rangeEnd, maxRange);
 
     // Ray march through the interval
     vec3 accumulatedLight = vec3(0.0);
-    float transmittance = 1.0;     // How much light can still pass through
-    vec3 tint = vec3(1.0);         // Accumulated color tint from transparent materials
+    float visibility = 1.0;  // 1.0 = no hit yet, 0.0 = fully occluded
+    vec3 tint = vec3(1.0);   // Accumulated color tint from transparent materials
 
-    float stepSize = 1.0;  // March 1 pixel at a time for accuracy
-    int maxSteps = int(rangeEnd - rangeStart);
+    float stepSize = 1.0;    // March 1 pixel at a time
+    int maxSteps = int(ceil(rangeEnd - rangeStart));
 
-    for (int step = 0; step < maxSteps && transmittance > 0.01; step++) {
+    bool hitBoundary = false;
+
+    for (int step = 0; step < maxSteps && visibility > 0.01; step++) {
         float t = rangeStart + float(step) * stepSize + 0.5;
+        if (t >= rangeEnd) break;
+
         ivec2 samplePos = ivec2(probeCenter + dir * t);
 
         if (!inBounds(samplePos)) {
-            // If we hit the top ceiling, inject the sky light ONCE
-            if (skyEnabled && samplePos.y >= worldSize.y - 1) {
-                float sunElevation = sin(timeOfDay * 3.14159);
-                vec3 skyLight;
-                if (sunElevation < 0.3) {
-                    float t = max(sunElevation, 0.0) / 0.3;
-                    skyLight = mix(vec3(0.05, 0.03, 0.08), vec3(1.0, 0.5, 0.2), t);
-                } else {
-                    skyLight = vec3(1.0, 0.98, 0.92);
-                }
-                float skyFactor = max(sunElevation, 0.0);
-                accumulatedLight += skyLight * skyFactor * transmittance * 2.0;
-            }
-            // Kill the ray's transmittance so it doesn't fetch the upper cascade
-            transmittance = 0.0;
+            hitBoundary = true;
             break;
         }
 
@@ -225,25 +267,39 @@ void main() {
         uint elem = imageLoad(stateIn, samplePos).r;
         vec3 matTint = getMaterialTint(elem);
 
-        // Accumulate emission weighted by current transmittance
-        accumulatedLight += emission * opacity * transmittance * tint;
+        // Accumulate emission weighted by current visibility
+        // Emission is the light the material produces — don't multiply by opacity again
+        accumulatedLight += emission * visibility * tint;
 
-        // Update transmittance and tint
-        transmittance *= (1.0 - opacity);
-        tint *= matTint;
+        // Update visibility and tint based on opacity
+        visibility *= (1.0 - opacity);
+        tint *= mix(vec3(1.0), matTint, opacity);
     }
 
-    // If there's remaining transmittance and we're not the highest cascade,
-    // fetch the incoming radiance from the next cascade up
-    if (transmittance > 0.01 && N + 1 < numCascades) {
+    // --- Handle sky and upper cascade merging ---
+    // Only the HIGHEST cascade injects sky light at boundaries
+    // Other cascades rely on merging with the cascade above them
+    if (hitBoundary && N == numCascades - 1) {
+        // Inject sky radiance for the highest cascade
+        vec3 skyRad = getSkyRadiance(dir);
+        accumulatedLight += skyRad * visibility * tint;
+        // Don't zero out visibility — let it propagate
+    }
+
+    // If there's remaining visibility and we're not the highest cascade,
+    // merge with the next cascade up using proper interval merging
+    if (visibility > 0.01 && N + 1 < numCascades && !hitBoundary) {
         // Sample point is at the END of our tracing interval
         vec2 samplePoint = probeCenter + dir * rangeEnd;
         vec4 upperRadiance = sampleUpperCascade(N + 1, samplePoint, angle);
 
-        // Merge: the upper cascade's radiance passes through our remaining transmittance
-        accumulatedLight += upperRadiance.rgb * transmittance * tint;
+        // Proper interval merge: near.rgb + far.rgb * near.visibility
+        vec4 nearInterval = vec4(accumulatedLight, visibility);
+        vec4 merged = mergeIntervals(nearInterval, upperRadiance);
+        accumulatedLight = merged.rgb;
+        visibility = merged.a;
     }
 
-    // Write result: RGB = radiance along this ray, A = remaining transmittance
-    writeCascade(N, probeX, probeY, rayIdx, vec4(accumulatedLight, transmittance));
+    // Write result: RGB = radiance along this ray, A = visibility (1=no hit, 0=hit)
+    writeCascade(N, probeX, probeY, rayIdx, vec4(accumulatedLight, visibility));
 }

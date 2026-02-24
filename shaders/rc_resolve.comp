@@ -41,9 +41,6 @@ void main() {
     if (pos.x >= worldSize.x || pos.y >= worldSize.y) return;
 
     // Cascade 0: spacing = 1, so probes are at every pixel
-    // This means we can directly index without bilinear interpolation
-    // (probe center at (x+0.5, y+0.5) maps to pixel (x, y))
-
     int pcx = probeCountX[0];
     int pcy = probeCountY[0];
 
@@ -51,14 +48,13 @@ void main() {
     int probeX = clamp(pos.x, 0, pcx - 1);
     int probeY = clamp(pos.y, 0, pcy - 1);
 
-    // Integrate all angular rays with a 3x3 spatial blur to kill petal artifacts
+    // Integrate all angular rays with a 3x3 spatial blur to reduce artifacts
     int numRays = BASE_RAYS;
     vec3 sumLight = vec3(0.0);
     float weightSum = 0.0;
 
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
-            // Safely clamp neighbor coordinates
             int px = clamp(probeX + dx, 0, pcx - 1);
             int py = clamp(probeY + dy, 0, pcy - 1);
 
@@ -77,11 +73,14 @@ void main() {
     // Average the spatial blur
     vec3 totalLight = sumLight / weightSum;
 
-    // Convert from radiance sum to irradiance integral
+    // Convert from radiance sum to irradiance:
+    // For 2D (flatland): irradiance = (2*PI / numRays) * sum(radiance)
+    // This is the Monte Carlo estimate of the integral over directions
     totalLight *= (2.0 * 3.14159265) / float(numRays);
 
-    // Global exposure tune
-    totalLight *= 0.5;
+    // The cascade ray marching already accumulates proper radiance values,
+    // so we just need a mild exposure control here
+    totalLight *= 0.15;
 
     imageStore(lightmapOut, pos, vec4(totalLight, 1.0));
 }
