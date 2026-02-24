@@ -1,0 +1,87 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba16f, binding = 0) uniform writeonly image2D lightmapOut;
+
+// Cascade radiance storage
+layout(std430, binding = 7) buffer CascadeRadiance {
+    vec4 cascadeData[];
+};
+
+uniform ivec2 worldSize;
+
+#ifndef BASE_RAYS
+#define BASE_RAYS 4
+#endif
+
+#ifndef MAX_CASCADES
+#define MAX_CASCADES 8
+#endif
+
+uniform int cascadeOffsets[MAX_CASCADES];
+uniform int probeCountX[MAX_CASCADES];
+uniform int probeCountY[MAX_CASCADES];
+
+// Read a probe+ray from cascade 0
+vec4 readCascade0(int probeX, int probeY, int rayIdx) {
+    int pcx = probeCountX[0];
+    int pcy = probeCountY[0];
+
+    probeX = clamp(probeX, 0, pcx - 1);
+    probeY = clamp(probeY, 0, pcy - 1);
+
+    int numRays = BASE_RAYS;  // Cascade 0 has BASE_RAYS
+    int idx = cascadeOffsets[0] + (probeY * pcx + probeX) * numRays + rayIdx;
+    return cascadeData[idx];
+}
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (pos.x >= worldSize.x || pos.y >= worldSize.y) return;
+
+    // Cascade 0: spacing = 1, so probes are at every pixel
+    // This means we can directly index without bilinear interpolation
+    // (probe center at (x+0.5, y+0.5) maps to pixel (x, y))
+
+    int pcx = probeCountX[0];
+    int pcy = probeCountY[0];
+
+    // For cascade 0 with spacing=1, the probe grid matches the pixel grid
+    int probeX = clamp(pos.x, 0, pcx - 1);
+    int probeY = clamp(pos.y, 0, pcy - 1);
+
+    // Integrate all angular rays with a 3x3 spatial blur to kill petal artifacts
+    int numRays = BASE_RAYS;
+    vec3 sumLight = vec3(0.0);
+    float weightSum = 0.0;
+
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            // Safely clamp neighbor coordinates
+            int px = clamp(probeX + dx, 0, pcx - 1);
+            int py = clamp(probeY + dy, 0, pcy - 1);
+
+            vec3 probeLight = vec3(0.0);
+            for (int r = 0; r < numRays; r++) {
+                probeLight += readCascade0(px, py, r).rgb;
+            }
+
+            // Gaussian-like weights: 4 (center), 2 (edges), 1 (corners)
+            float w = (dx == 0 && dy == 0) ? 4.0 : (abs(dx) + abs(dy) == 1 ? 2.0 : 1.0);
+            sumLight += probeLight * w;
+            weightSum += w;
+        }
+    }
+
+    // Average the spatial blur
+    vec3 totalLight = sumLight / weightSum;
+
+    // Convert from radiance sum to irradiance integral
+    totalLight *= (2.0 * 3.14159265) / float(numRays);
+
+    // Global exposure tune
+    totalLight *= 0.5;
+
+    imageStore(lightmapOut, pos, vec4(totalLight, 1.0));
+}

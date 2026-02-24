@@ -8,17 +8,23 @@
 *
 * This software is released under the MIT License.
 * https://opensource.org/licenses/MIT
+*
+* MODIFIED: Replaced bounce-based lighting with Radiance Cascades (RC).
+* The old lighting.comp (multi-pass bounce) is replaced by three new shaders:
+*   1. rc_emitters.comp  - Extract emission + opacity G-buffer
+*   2. rc_cascade.comp   - Hierarchical cascade merge (dispatched per-level)
+*   3. rc_resolve.comp   - Resolve cascade 0 into per-pixel lightmap
 */
 
 #include "world.hpp"
 #include <iostream>
 #include <vector>
+#include <cmath>
 
 namespace cisalpine {
 
 World::World(int width, int height)
     : worldWidth(width), worldHeight(height) {
-    // Calculate chunk grid dimensions
     chunkGridWidth  = (worldWidth  + CHUNK_SIZE - 1) / CHUNK_SIZE;
     chunkGridHeight = (worldHeight + CHUNK_SIZE - 1) / CHUNK_SIZE;
     totalChunks     = chunkGridWidth * chunkGridHeight;
@@ -33,24 +39,27 @@ World::~World() {
     if (lightmapPingPong) glDeleteTextures(1, &lightmapPingPong);
     if (displayTexture) glDeleteTextures(1, &displayTexture);
     if (skyTexture) glDeleteTextures(1, &skyTexture);
+    if (radianceFieldTexture) glDeleteTextures(1, &radianceFieldTexture);
     if (quadVAO) glDeleteVertexArrays(1, &quadVAO);
     if (quadVBO) glDeleteBuffers(1, &quadVBO);
     if (chunkGridSSBO[0]) glDeleteBuffers(2, chunkGridSSBO);
     if (activeChunkSSBO) glDeleteBuffers(1, &activeChunkSSBO);
+    if (cascadeDataSSBO) glDeleteBuffers(1, &cascadeDataSSBO);
 
-    // Destroy GPU timers
     for (int i = 0; i < TIMER_COUNT; i++) {
         gpuTimers[i].destroy();
     }
 }
 
 bool World::init(const std::string& shaderHeader) {
-    // Build an augmented shader header that includes chunk constants
+    // Build augmented shader header with chunk and RC constants
     std::string fullHeader = shaderHeader;
     fullHeader += "#define CHUNK_SIZE " + std::to_string(CHUNK_SIZE) + "\n";
     fullHeader += "#define CHUNK_GRID_W " + std::to_string(chunkGridWidth) + "\n";
     fullHeader += "#define CHUNK_GRID_H " + std::to_string(chunkGridHeight) + "\n";
     fullHeader += "#define TOTAL_CHUNKS " + std::to_string(totalChunks) + "\n";
+    fullHeader += "#define BASE_RAYS " + std::to_string(RC_BASE_RAYS) + "\n";
+    fullHeader += "#define MAX_CASCADES " + std::to_string(RC_MAX_CASCADES) + "\n";
     fullHeader += "\n";
 
     // Load shaders
@@ -66,10 +75,21 @@ bool World::init(const std::string& shaderHeader) {
         std::cerr << "Failed to load render shader" << std::endl;
         return false;
     }
-    if (!lightingShader.loadCompute("shaders/lighting.comp", fullHeader)) {
-        std::cerr << "Failed to load lighting shader" << std::endl;
+
+    // === Radiance Cascade shaders (replaces lighting.comp) ===
+    if (!rcEmitterShader.loadCompute("shaders/rc_emitters.comp", fullHeader)) {
+        std::cerr << "Failed to load RC emitter shader" << std::endl;
         return false;
     }
+    if (!rcCascadeShader.loadCompute("shaders/rc_cascade.comp", fullHeader)) {
+        std::cerr << "Failed to load RC cascade shader" << std::endl;
+        return false;
+    }
+    if (!rcResolveShader.loadCompute("shaders/rc_resolve.comp", fullHeader)) {
+        std::cerr << "Failed to load RC resolve shader" << std::endl;
+        return false;
+    }
+
     if (!compositeShader.loadCompute("shaders/composite.comp", fullHeader)) {
         std::cerr << "Failed to load composite shader" << std::endl;
         return false;
@@ -86,23 +106,29 @@ bool World::init(const std::string& shaderHeader) {
     createTextures();
     createQuad();
     createChunkBuffers();
+    createRCBuffers();
 
     // Initialize GPU timer queries
     for (int i = 0; i < TIMER_COUNT; i++) {
         gpuTimers[i].init();
     }
 
-    // Wake all chunks for the first frame
     wakeAllChunks();
 
     std::cout << "Chunk system initialized: " << chunkGridWidth << "x" << chunkGridHeight
               << " grid (" << totalChunks << " chunks of " << CHUNK_SIZE << "x" << CHUNK_SIZE << ")" << std::endl;
 
+    // Build initial cascade level descriptors
+    rebuildRCLevels(renderSettingsData.rcCascadeLevels);
+
+    std::cout << "Radiance Cascades initialized: " << rcNumLevels << " levels, "
+              << rcLevels[0].probeCountX << "x" << rcLevels[0].probeCountY << " L0 probes" << std::endl;
+
     return true;
 }
 
 void World::createTextures() {
-    // Create state textures (RGBA8UI)
+    // State textures (RGBA8UI)
     glGenTextures(2, stateTextures);
     for (int i = 0; i < 2; i++) {
         glBindTexture(GL_TEXTURE_2D, stateTextures[i]);
@@ -112,13 +138,12 @@ void World::createTextures() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-        // Clear to empty
         std::vector<uint8_t> clearData(worldWidth * worldHeight * 4, 0);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
             GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, clearData.data());
     }
 
-    // Create force field textures (RGBA16F) - double buffered
+    // Force field textures (RGBA16F)
     glGenTextures(2, forceTextures);
     for (int i = 0; i < 2; i++) {
         glBindTexture(GL_TEXTURE_2D, forceTextures[i]);
@@ -128,13 +153,12 @@ void World::createTextures() {
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
         glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-        // Clear to zero force
         std::vector<float> clearForce(worldWidth * worldHeight * 4, 0.0f);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
             GL_RGBA, GL_FLOAT, clearForce.data());
     }
 
-    // Create color texture (RGBA8)
+    // Color texture (RGBA8)
     glGenTextures(1, &colorTexture);
     glBindTexture(GL_TEXTURE_2D, colorTexture);
     glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, worldWidth, worldHeight);
@@ -143,7 +167,7 @@ void World::createTextures() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // Create normal texture (RGBA16F: xy = normal, z = height, w = specular power)
+    // Normal texture (RGBA16F)
     glGenTextures(1, &normalTexture);
     glBindTexture(GL_TEXTURE_2D, normalTexture);
     glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, worldWidth, worldHeight);
@@ -152,7 +176,7 @@ void World::createTextures() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // Create lightmap textures (RGBA16F: rgb = light color, a = intensity)
+    // Lightmap textures (RGBA16F) - now written by RC resolve instead of bounce passes
     glGenTextures(1, &lightmapTexture);
     glBindTexture(GL_TEXTURE_2D, lightmapTexture);
     glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, worldWidth, worldHeight);
@@ -161,6 +185,7 @@ void World::createTextures() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    // Keep ping-pong for potential future use
     glGenTextures(1, &lightmapPingPong);
     glBindTexture(GL_TEXTURE_2D, lightmapPingPong);
     glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, worldWidth, worldHeight);
@@ -169,7 +194,7 @@ void World::createTextures() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // Create display texture (RGBA8)
+    // Display texture (RGBA8)
     glGenTextures(1, &displayTexture);
     glBindTexture(GL_TEXTURE_2D, displayTexture);
     glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, worldWidth, worldHeight);
@@ -178,7 +203,7 @@ void World::createTextures() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
-    // Create sky texture (RGBA8) - rendered by composite shader when sky enabled
+    // Sky texture (RGBA8)
     glGenTextures(1, &skyTexture);
     glBindTexture(GL_TEXTURE_2D, skyTexture);
     glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA8, worldWidth, worldHeight);
@@ -187,11 +212,163 @@ void World::createTextures() {
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
     glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
 
+    // === Radiance Field texture (RGBA16F): RGB=emission, A=opacity ===
+    glGenTextures(1, &radianceFieldTexture);
+    glBindTexture(GL_TEXTURE_2D, radianceFieldTexture);
+    glTexStorage2D(GL_TEXTURE_2D, 1, GL_RGBA16F, worldWidth, worldHeight);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
     glBindTexture(GL_TEXTURE_2D, 0);
 }
 
+// === Radiance Cascade Buffer Management ===
+
+void World::createRCBuffers() {
+    glGenBuffers(1, &cascadeDataSSBO);
+    // Actual allocation happens in rebuildRCLevels()
+}
+
+void World::rebuildRCLevels(int numLevels) {
+    numLevels = std::max(1, std::min(numLevels, static_cast<int>(RC_MAX_CASCADES)));
+    rcNumLevels = numLevels;
+    rcLevels.resize(numLevels);
+
+    // Compute per-level metadata
+    int totalEntries = 0;
+    for (int n = 0; n < numLevels; n++) {
+        RCLevelInfo& lvl = rcLevels[n];
+        lvl.spacing    = 1 << n;
+        lvl.numRays    = RC_BASE_RAYS * (1 << n);
+        lvl.probeCountX = (worldWidth  + lvl.spacing - 1) / lvl.spacing;
+        lvl.probeCountY = (worldHeight + lvl.spacing - 1) / lvl.spacing;
+        lvl.dataOffset  = totalEntries;
+        lvl.totalEntries = lvl.probeCountX * lvl.probeCountY * lvl.numRays;
+        totalEntries += lvl.totalEntries;
+    }
+
+    // Allocate (or reallocate) the cascade SSBO
+    // Each entry is a vec4 (16 bytes)
+    cascadeDataSize = static_cast<size_t>(totalEntries) * sizeof(float) * 4;
+
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, cascadeDataSSBO);
+    glBufferData(GL_SHADER_STORAGE_BUFFER, cascadeDataSize, nullptr, GL_DYNAMIC_DRAW);
+
+    // Clear to zero
+    std::vector<float> zeros(totalEntries * 4, 0.0f);
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, cascadeDataSize, zeros.data());
+    glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
+
+    std::cout << "RC levels rebuilt: " << numLevels << " levels, "
+              << totalEntries << " total probe*ray entries ("
+              << (cascadeDataSize / 1024) << " KB)" << std::endl;
+}
+
+void World::renderRadianceCascades() {
+    // Check if cascade level count changed
+    int targetLevels = renderSettingsData.rcCascadeLevels;
+    if (targetLevels != rcNumLevels) {
+        rebuildRCLevels(targetLevels);
+    }
+
+    GLuint workGroupsX = (worldWidth + 15) / 16;
+    GLuint workGroupsY = (worldHeight + 15) / 16;
+
+    // ---- Step 1: Extract emitters into radiance field G-buffer ----
+    gpuTimers[TIMER_RC_EMITTERS].begin();
+
+    glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
+    glBindImageTexture(1, radianceFieldTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+
+    rcEmitterShader.use();
+    rcEmitterShader.setFloat("time", simulationTime);
+    rcEmitterShader.setBool("glowEnabled", renderSettingsData.glowEnabled);
+    rcEmitterShader.setFloat("glowIntensity", renderSettingsData.glowIntensity);
+    rcEmitterShader.setBool("skyEnabled", renderSettingsData.skyEnabled);
+    rcEmitterShader.setFloat("timeOfDay", renderSettingsData.timeOfDay);
+
+    glDispatchCompute(workGroupsX, workGroupsY, 1);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+    gpuTimers[TIMER_RC_EMITTERS].end();
+
+    // ---- Step 2: Cascade merge passes (highest level → level 0) ----
+    gpuTimers[TIMER_RC_CASCADE].begin();
+
+    // Bind the radiance field for cascade shader to read
+    glBindImageTexture(0, radianceFieldTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
+    glBindImageTexture(1, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
+
+    // Bind cascade SSBO
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, cascadeDataSSBO);
+
+    rcCascadeShader.use();
+    rcCascadeShader.setInt("numCascades", rcNumLevels);
+    rcCascadeShader.setInt("worldSize", worldWidth);  // Note: using setVec2-like below
+    // Set worldSize as ivec2
+    glUniform2i(glGetUniformLocation(rcCascadeShader.id(), "worldSize"), worldWidth, worldHeight);
+    rcCascadeShader.setFloat("time", simulationTime);
+    rcCascadeShader.setBool("skyEnabled", renderSettingsData.skyEnabled);
+    rcCascadeShader.setFloat("timeOfDay", renderSettingsData.timeOfDay);
+
+    // Upload per-level uniforms
+    for (int n = 0; n < rcNumLevels; n++) {
+        std::string offsetName = "cascadeOffsets[" + std::to_string(n) + "]";
+        std::string pcxName    = "probeCountX[" + std::to_string(n) + "]";
+        std::string pcyName    = "probeCountY[" + std::to_string(n) + "]";
+
+        glUniform1i(glGetUniformLocation(rcCascadeShader.id(), offsetName.c_str()), rcLevels[n].dataOffset);
+        glUniform1i(glGetUniformLocation(rcCascadeShader.id(), pcxName.c_str()),    rcLevels[n].probeCountX);
+        glUniform1i(glGetUniformLocation(rcCascadeShader.id(), pcyName.c_str()),    rcLevels[n].probeCountY);
+    }
+
+    // Dispatch from highest cascade level down to 0
+    for (int n = rcNumLevels - 1; n >= 0; n--) {
+        rcCascadeShader.use();  // Rebind in case GL state changed
+        rcCascadeShader.setInt("cascadeLevel", n);
+
+        // Dispatch enough invocations to cover all probes * rays at this level
+        int totalWork = rcLevels[n].totalEntries;
+        GLuint workGroups = (totalWork + 63) / 64;  // local_size_x = 64
+        glDispatchCompute(workGroups, 1, 1);
+
+        // Barrier between cascade levels so level N can read N+1's results
+        glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT);
+    }
+
+    gpuTimers[TIMER_RC_CASCADE].end();
+
+    // ---- Step 3: Resolve cascade 0 → per-pixel lightmap ----
+    gpuTimers[TIMER_RC_RESOLVE].begin();
+
+    glBindImageTexture(0, lightmapTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
+    glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 7, cascadeDataSSBO);
+
+    rcResolveShader.use();
+    glUniform2i(glGetUniformLocation(rcResolveShader.id(), "worldSize"), worldWidth, worldHeight);
+
+    // Upload per-level uniforms for resolve shader too
+    for (int n = 0; n < rcNumLevels; n++) {
+        std::string offsetName = "cascadeOffsets[" + std::to_string(n) + "]";
+        std::string pcxName    = "probeCountX[" + std::to_string(n) + "]";
+        std::string pcyName    = "probeCountY[" + std::to_string(n) + "]";
+
+        glUniform1i(glGetUniformLocation(rcResolveShader.id(), offsetName.c_str()), rcLevels[n].dataOffset);
+        glUniform1i(glGetUniformLocation(rcResolveShader.id(), pcxName.c_str()),    rcLevels[n].probeCountX);
+        glUniform1i(glGetUniformLocation(rcResolveShader.id(), pcyName.c_str()),    rcLevels[n].probeCountY);
+    }
+
+    glDispatchCompute(workGroupsX, workGroupsY, 1);
+    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
+
+    gpuTimers[TIMER_RC_RESOLVE].end();
+}
+
+// === Existing methods (unchanged unless noted) ===
+
 void World::createChunkBuffers() {
-    // Double-buffered chunk grid SSBOs
     glGenBuffers(2, chunkGridSSBO);
     std::vector<GLuint> zeros(totalChunks, 0);
     for (int i = 0; i < 2; i++) {
@@ -202,13 +379,12 @@ void World::createChunkBuffers() {
                      GL_DYNAMIC_DRAW);
     }
 
-    // Active chunk list SSBO: 3 uints for dispatch header + totalChunks for IDs
     glGenBuffers(1, &activeChunkSSBO);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, activeChunkSSBO);
     size_t activeListSize = (3 + totalChunks) * sizeof(GLuint);
     std::vector<GLuint> initData(3 + totalChunks, 0);
-    initData[1] = 1; // num_groups_y = 1
-    initData[2] = 1; // num_groups_z = 1
+    initData[1] = 1;
+    initData[2] = 1;
     glBufferData(GL_SHADER_STORAGE_BUFFER, activeListSize, initData.data(), GL_DYNAMIC_DRAW);
 
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
@@ -216,7 +392,6 @@ void World::createChunkBuffers() {
 
 void World::createQuad() {
     float vertices[] = {
-        // pos       // uv
         -1.0f,  1.0f, 0.0f, 1.0f,
         -1.0f, -1.0f, 0.0f, 0.0f,
          1.0f, -1.0f, 1.0f, 0.0f,
@@ -250,7 +425,6 @@ void World::clear() {
             GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, clearData.data());
     }
 
-    // Also clear force field
     std::vector<float> clearForce(worldWidth * worldHeight * 4, 0.0f);
     for (int i = 0; i < 2; i++) {
         glBindTexture(GL_TEXTURE_2D, forceTextures[i]);
@@ -259,15 +433,12 @@ void World::clear() {
     }
 
     glBindTexture(GL_TEXTURE_2D, 0);
-
-    // Wake all chunks so the cleared state gets processed
     wakeAllChunks();
 }
 
 // === Chunk System ===
 
 void World::wakeAllChunks() {
-    // Set all entries in the current-read chunk grid to 1 (awake)
     std::vector<GLuint> allAwake(totalChunks, 1);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, chunkGridSSBO[currentChunkGrid]);
     glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, totalChunks * sizeof(GLuint), allAwake.data());
@@ -281,12 +452,10 @@ void World::wakeChunkAt(int worldX, int worldY) {
     int cy = worldY / CHUNK_SIZE;
     int chunkIdx = cy * chunkGridWidth + cx;
 
-    // Write 1 to the current-read chunk grid so it's picked up this frame
     GLuint one = 1;
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, chunkGridSSBO[currentChunkGrid]);
     glBufferSubData(GL_SHADER_STORAGE_BUFFER, chunkIdx * sizeof(GLuint), sizeof(GLuint), &one);
 
-    // Also wake neighbors for boundary safety
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             if (dx == 0 && dy == 0) continue;
@@ -302,29 +471,22 @@ void World::wakeChunkAt(int worldX, int worldY) {
 }
 
 void World::buildActiveChunkList() {
-    // Reset the dispatch counter to 0
     GLuint zero = 0;
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, activeChunkSSBO);
-    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(GLuint), &zero); // num_groups_x = 0
+    glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(GLuint), &zero);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-    // Bind SSBOs for the chunk build shader:
-    // binding 4 = chunk grid (current read)
-    // binding 5 = chunk grid (next frame write - clear to 0)
-    // binding 6 = active chunk list + indirect dispatch
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, chunkGridSSBO[currentChunkGrid]);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, chunkGridSSBO[1 - currentChunkGrid]);
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, activeChunkSSBO);
 
     chunkBuildShader.use();
 
-    // Dispatch one thread per chunk
     GLuint workGroups = (totalChunks + 63) / 64;
     glDispatchCompute(workGroups, 1, 1);
 
     glMemoryBarrier(GL_SHADER_STORAGE_BARRIER_BIT | GL_COMMAND_BARRIER_BIT);
 
-    // Optional: read back count for debug display
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, activeChunkSSBO);
     GLuint count;
     glGetBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(GLuint), &count);
@@ -341,10 +503,6 @@ void World::swapChunkGrids() {
 void World::forceUpdateStep() {
     int nextForceBuffer = 1 - currentForceBuffer;
 
-    // Bind force field textures for read/write
-    // binding 0: forceIn (RGBA16F, read)
-    // binding 1: forceOut (RGBA16F, write)
-    // binding 2: stateIn (RGBA8UI, read) - to detect black holes, bombs, etc.
     glBindImageTexture(0, forceTextures[currentForceBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
     glBindImageTexture(1, forceTextures[nextForceBuffer], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
     glBindImageTexture(2, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
@@ -364,21 +522,16 @@ void World::forceUpdateStep() {
 }
 
 void World::simulationStep() {
-    // First: update the force field (reads current state for black holes/bombs)
     gpuTimers[TIMER_FORCE_UPDATE].begin();
     forceUpdateStep();
     gpuTimers[TIMER_FORCE_UPDATE].end();
 
     int nextBuffer = 1 - currentBuffer;
 
-    // Bind textures to image units
     glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
     glBindImageTexture(1, stateTextures[nextBuffer], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8UI);
-
-    // Bind force field for the simulation shader to read
     glBindImageTexture(3, forceTextures[currentForceBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
 
-    // Run simulation shader
     simulationShader.use();
     simulationShader.setVec2("worldSize", static_cast<float>(worldWidth), static_cast<float>(worldHeight));
     simulationShader.setFloat("time", simulationTime);
@@ -387,38 +540,30 @@ void World::simulationStep() {
     gpuTimers[TIMER_SIMULATION].begin();
 
     if (simSettings.chunkSleepEnabled) {
-        // Pass A: Build the active chunk list from current chunk grid
-        gpuTimers[TIMER_SIMULATION].end(); // end sim timer briefly for chunk build
+        gpuTimers[TIMER_SIMULATION].end();
 
         gpuTimers[TIMER_CHUNK_BUILD].begin();
         buildActiveChunkList();
         gpuTimers[TIMER_CHUNK_BUILD].end();
 
-        gpuTimers[TIMER_SIMULATION].begin(); // restart sim timer for actual dispatch
+        gpuTimers[TIMER_SIMULATION].begin();
 
         simulationShader.use();
 
-        // Bind chunk SSBOs for the simulation shader
-        // binding 4 = chunk grid (read, for this frame)
-        // binding 5 = chunk grid (next frame, sim writes wakes here)
-        // binding 6 = active chunk list (read chunk IDs)
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 4, chunkGridSSBO[currentChunkGrid]);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 5, chunkGridSSBO[1 - currentChunkGrid]);
         glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 6, activeChunkSSBO);
 
         simulationShader.setBool("useChunkSleep", true);
 
-        // Pass B: Indirect dispatch — only process awake chunks
         glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, activeChunkSSBO);
         glDispatchComputeIndirect(0);
         glBindBuffer(GL_DISPATCH_INDIRECT_BUFFER, 0);
 
         glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT | GL_SHADER_STORAGE_BARRIER_BIT);
 
-        // Swap chunk grids: the "next frame write" becomes the "current read" for next step
         swapChunkGrids();
     } else {
-        // Fallback: classic full-world dispatch
         simulationShader.setBool("useChunkSleep", false);
 
         GLuint workGroupsX = (worldWidth + 15) / 16;
@@ -435,7 +580,6 @@ void World::simulationStep() {
 }
 
 void World::update(float dt) {
-    // Collect all GPU timer results from previous frame
     for (int i = 0; i < TIMER_COUNT; i++) {
         gpuTimers[i].collect();
     }
@@ -443,7 +587,6 @@ void World::update(float dt) {
     accumulatedTime += dt;
     simulationTime += dt;
 
-    // Fixed timestep simulation
     while (accumulatedTime >= FIXED_TIMESTEP) {
         for (int i = 0; i < simSettings.stepsPerFrame; i++) {
             simulationStep();
@@ -457,7 +600,7 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
     GLuint workGroupsX = (worldWidth + 15) / 16;
     GLuint workGroupsY = (worldHeight + 15) / 16;
 
-    // Pass 1: Convert state texture to colors
+    // Pass 1: Convert state texture to colors + normals + sky
     gpuTimers[TIMER_RENDER].begin();
 
     glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
@@ -481,40 +624,10 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
 
     gpuTimers[TIMER_RENDER].end();
 
-    // Pass 2: Light Propagation
-    gpuTimers[TIMER_LIGHTING].begin();
+    // Pass 2: Radiance Cascades (replaces old bounce lighting)
+    renderRadianceCascades();
 
-    lightingShader.use();
-    lightingShader.setBool("glowEnabled", renderSettingsData.glowEnabled);
-    lightingShader.setFloat("glowIntensity", renderSettingsData.glowIntensity);
-    lightingShader.setFloat("glowRadius", renderSettingsData.glowRadius);
-    lightingShader.setFloat("time", simulationTime);
-    lightingShader.setFloat("ambientLight", renderSettingsData.ambientLight);
-    lightingShader.setBool("skyEnabled", renderSettingsData.skyEnabled);
-    lightingShader.setFloat("timeOfDay", renderSettingsData.timeOfDay);
-    lightingShader.setBool("showSun", renderSettingsData.showSun);
-
-    int bounces = renderSettingsData.lightBounces;
-    for (int bounce = 0; bounce < bounces; bounce++) {
-        GLuint readLight  = (bounce == 0) ? lightmapTexture : ((bounce % 2 == 0) ? lightmapTexture : lightmapPingPong);
-        GLuint writeLight = (bounce % 2 == 0) ? lightmapPingPong : lightmapTexture;
-
-        glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
-        glBindImageTexture(1, normalTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
-        glBindImageTexture(3, readLight, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
-        glBindImageTexture(4, writeLight, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA16F);
-
-        lightingShader.setInt("bouncePass", bounce);
-
-        glDispatchCompute(workGroupsX, workGroupsY, 1);
-        glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-    }
-
-    gpuTimers[TIMER_LIGHTING].end();
-
-    // Determine which lightmap has the final result
-    GLuint finalLightmap = (bounces % 2 == 0) ? lightmapTexture : lightmapPingPong;
-    if (bounces == 0) finalLightmap = lightmapTexture;
+    // The lightmap is now in lightmapTexture, written by rc_resolve
 
     // Pass 3: Composite
     gpuTimers[TIMER_COMPOSITE].begin();
@@ -522,7 +635,7 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
     glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
     glBindImageTexture(1, colorTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
     glBindImageTexture(2, normalTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
-    glBindImageTexture(3, finalLightmap, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
+    glBindImageTexture(3, lightmapTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
     glBindImageTexture(4, displayTexture, 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8);
     glBindImageTexture(5, skyTexture, 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8);
 
@@ -541,17 +654,14 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
     // Pass 4: Blit to screen
     gpuTimers[TIMER_QUAD_BLIT].begin();
 
-    // Camera defines which portion of the texture to sample
     float visibleW = static_cast<float>(worldWidth) / camZoom;
     float visibleH = static_cast<float>(worldHeight) / camZoom;
 
-    // UV bounds in the display texture (0..1 range)
     float uMin = (camX - visibleW * 0.5f) / static_cast<float>(worldWidth);
     float uMax = (camX + visibleW * 0.5f) / static_cast<float>(worldWidth);
     float vMin = (camY - visibleH * 0.5f) / static_cast<float>(worldHeight);
     float vMax = (camY + visibleH * 0.5f) / static_cast<float>(worldHeight);
 
-    // Clamp to valid range
     if (uMin < 0.0f) { uMax -= uMin; uMin = 0.0f; }
     if (uMax > 1.0f) { uMin -= (uMax - 1.0f); uMax = 1.0f; }
     if (vMin < 0.0f) { vMax -= vMin; vMin = 0.0f; }
@@ -564,17 +674,18 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
 
     quadShader.use();
 
-    // Choose which texture to display based on debug view mode
+    // Choose debug view texture
     GLuint blitTexture = displayTexture;
-    int viewModeInt = 0; // 0=normal sampler2D, 1=normals (needs remap), 2=lightmap (float), 3=force field (float)
+    int viewModeInt = 0;
     switch (viewMode) {
-        case DebugViewMode::Final:      blitTexture = displayTexture; viewModeInt = 0; break;
-        case DebugViewMode::Color:      blitTexture = colorTexture;   viewModeInt = 0; break;
-        case DebugViewMode::Normals:    blitTexture = normalTexture;  viewModeInt = 1; break;
-        case DebugViewMode::Lightmap:   blitTexture = finalLightmap;  viewModeInt = 2; break;
-        case DebugViewMode::State:      blitTexture = displayTexture; viewModeInt = 0; break; // State needs special handling - we use displayTexture as fallback
-        case DebugViewMode::Sky:        blitTexture = skyTexture;     viewModeInt = 0; break;
-        case DebugViewMode::ForceField: blitTexture = forceTextures[currentForceBuffer]; viewModeInt = 3; break;
+        case DebugViewMode::Final:         blitTexture = displayTexture;     viewModeInt = 0; break;
+        case DebugViewMode::Color:         blitTexture = colorTexture;       viewModeInt = 0; break;
+        case DebugViewMode::Normals:       blitTexture = normalTexture;      viewModeInt = 1; break;
+        case DebugViewMode::Lightmap:      blitTexture = lightmapTexture;    viewModeInt = 2; break;
+        case DebugViewMode::State:         blitTexture = displayTexture;     viewModeInt = 0; break;
+        case DebugViewMode::Sky:           blitTexture = skyTexture;         viewModeInt = 0; break;
+        case DebugViewMode::ForceField:    blitTexture = forceTextures[currentForceBuffer]; viewModeInt = 3; break;
+        case DebugViewMode::RadianceField: blitTexture = radianceFieldTexture; viewModeInt = 2; break;
         default: break;
     }
 
@@ -583,7 +694,6 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
     quadShader.setInt("displayTex", 0);
     quadShader.setInt("viewMode", viewModeInt);
 
-    // Still bind these for the normal view path
     glActiveTexture(GL_TEXTURE1);
     glBindTexture(GL_TEXTURE_2D, getCurrentForceTexture());
     quadShader.setInt("physicsTex", 1);
@@ -591,7 +701,6 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
     glBindTexture(GL_TEXTURE_2D, normalTexture);
     quadShader.setInt("normalTex", 2);
 
-    // Pass UV range as uniforms for camera
     quadShader.setVec4("uvBounds", uMin, vMin, uMax, vMax);
 
     glBindVertexArray(quadVAO);

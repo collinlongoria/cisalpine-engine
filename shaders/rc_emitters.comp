@@ -1,0 +1,124 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba8ui, binding = 0) uniform readonly  uimage2D stateIn;
+layout(rgba16f, binding = 1) uniform writeonly image2D  radianceField;
+
+struct ElementData {
+    vec4 color;
+    int type;
+    float density;
+    float viscosity;
+    float probability;
+    int flammability;
+    int glow;
+    int maxLife;
+    int gemstone;
+    float lightRadius;
+    float lightIntensity;
+    float ior;
+    int _pad;
+};
+
+layout(std430, binding = 2) buffer ElementRegistry {
+    ElementData elements[];
+};
+
+uniform float time;
+uniform bool  glowEnabled;
+uniform float glowIntensity;
+uniform bool  skyEnabled;
+uniform float timeOfDay;
+
+float hashNoise(ivec2 pos) {
+    return fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
+}
+
+// Returns opacity for a given element: 0 = transparent, 1 = fully opaque
+float getOpacity(uint elem) {
+    if (elem == EMPTY || elem >= MAX_ELEMENTS) return 0.0;
+    if (elem == BLACKHOLE) return 1.0;
+    if (elem == VOID) return 0.95;
+
+    int type = elements[elem].type;
+    if (type == 3) return 0.05;  // Gas
+    if (type == 2) return 0.15;  // Liquid
+    if (elements[elem].gemstone == 1) return 0.2;
+    return 0.85;                  // Static / Granular
+}
+
+// Returns the light tint color when light passes through this material
+vec3 getMaterialTint(uint elem) {
+    if (elem == EMPTY || elem >= MAX_ELEMENTS) return vec3(1.0);
+    if (elem == BLACKHOLE) return vec3(0.0);
+    if (elem == VOID) return vec3(0.1, 0.0, 0.15);
+    if (elements[elem].gemstone == 1) return elements[elem].color.rgb;
+    if (elem == WATER) return vec3(0.7, 0.8, 1.0);
+    if (elem == LAVA) return vec3(1.0, 0.6, 0.2);
+    return vec3(1.0);
+}
+
+void main() {
+    ivec2 pos  = ivec2(gl_GlobalInvocationID.xy);
+    ivec2 size = imageSize(stateIn);
+    if (pos.x >= size.x || pos.y >= size.y) return;
+
+    uvec4 state = imageLoad(stateIn, pos);
+    uint  elem  = state.r;
+
+    // === Compute emission ===
+    vec3 emission = vec3(0.0);
+
+    if (glowEnabled && elem != EMPTY && elem < MAX_ELEMENTS) {
+        float variation = hashNoise(pos);
+
+        // Light element
+        if (elem == LIGHT) {
+            float radius = elements[elem].lightRadius;
+            if (radius <= 0.0) radius = 20.0;
+            float intensity = elements[elem].lightIntensity;
+            if (intensity <= 0.0) intensity = 1.5;
+            emission = vec3(1.0, 0.98, 0.9) * intensity;
+        }
+        // Fire
+        else if (elem == FIRE) {
+            float flicker = sin(time * 8.0 + variation * 10.0) * 0.3 + 0.7;
+            float lifeFactor = float(state.g) / 255.0;
+            emission = vec3(1.0, 0.5, 0.15) * flicker * lifeFactor * glowIntensity * 1.2;
+        }
+        // Lava
+        else if (elem == LAVA) {
+            float pulse = sin(time * 3.0 + variation * 6.28) * 0.15 + 0.85;
+            emission = vec3(1.0, 0.4, 0.1) * pulse * glowIntensity * 0.8;
+        }
+        // BlackHole accretion
+        else if (elem == BLACKHOLE) {
+            float ring = sin(time * 4.0 + variation * 6.28) * 0.5 + 0.5;
+            vec3 accColor = mix(vec3(0.3, 0.05, 0.5), vec3(0.6, 0.2, 0.05), ring);
+            float intensity = elements[elem].lightIntensity;
+            if (intensity <= 0.0) intensity = 0.3;
+            emission = accColor * intensity;
+        }
+        // Bomb warning glow
+        else if (elem == BOMB) {
+            float fuseProgress = float(state.g) / 250.0;
+            if (fuseProgress > 0.5) {
+                emission = vec3(1.0, 0.2, 0.0) * fuseProgress * glowIntensity * 0.8;
+            }
+        }
+        // Generic glow elements
+        else if (elements[elem].glow == 1) {
+            emission = elements[elem].color.rgb * glowIntensity * 0.6;
+        }
+    }
+
+    // === Compute opacity ===
+    float opacity = getOpacity(elem);
+
+    // Pack: RGB = emission, A = opacity
+    // We also encode material tint in a way the cascade shader can reconstruct.
+    // For simplicity, opacity is enough - the cascade shader will handle tinting
+    // during ray marching by reading this texture.
+    imageStore(radianceField, pos, vec4(emission, opacity));
+}

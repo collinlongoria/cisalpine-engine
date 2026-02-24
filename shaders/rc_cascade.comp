@@ -1,0 +1,249 @@
+#version 460 core
+
+layout(local_size_x = 64) in;
+
+layout(rgba16f, binding = 0) uniform readonly image2D radianceField;
+layout(rgba8ui, binding = 1) uniform readonly uimage2D stateIn;
+
+struct ElementData {
+    vec4 color;
+    int type;
+    float density;
+    float viscosity;
+    float probability;
+    int flammability;
+    int glow;
+    int maxLife;
+    int gemstone;
+    float lightRadius;
+    float lightIntensity;
+    float ior;
+    int _pad;
+};
+
+layout(std430, binding = 2) buffer ElementRegistry {
+    ElementData elements[];
+};
+
+// Cascade radiance storage: flat array of vec4
+// Layout: cascade levels are stored contiguously.
+// For cascade N: offset = cascadeOffsets[N]
+// Index within cascade: (probeY * probeCountX + probeX) * raysPerProbe + rayIndex
+layout(std430, binding = 7) buffer CascadeRadiance {
+    vec4 cascadeData[];
+};
+
+// Uniforms set per-dispatch
+uniform int   cascadeLevel;      // Which cascade level we're computing (N)
+uniform int   numCascades;       // Total number of cascade levels
+uniform ivec2 worldSize;         // World dimensions in pixels
+uniform float time;
+uniform bool skyEnabled;
+uniform float timeOfDay;
+
+// Cascade configuration constants (set via uniform or #define)
+// BASE_RAYS = number of angular rays at cascade 0 (typically 4)
+// Each cascade N has: BASE_RAYS * 2^N angular rays
+// Probe spacing at cascade N: 2^N pixels
+#ifndef BASE_RAYS
+#define BASE_RAYS 4
+#endif
+
+#ifndef MAX_CASCADES
+#define MAX_CASCADES 8
+#endif
+
+// Pre-computed offsets into cascadeData for each level
+// Set by CPU at init time
+uniform int cascadeOffsets[MAX_CASCADES];
+uniform int probeCountX[MAX_CASCADES];
+uniform int probeCountY[MAX_CASCADES];
+
+// Helpers
+
+bool inBounds(ivec2 pos) {
+    return pos.x >= 0 && pos.x < worldSize.x && pos.y >= 0 && pos.y < worldSize.y;
+}
+
+vec3 getMaterialTint(uint elem) {
+    if (elem == EMPTY || elem >= MAX_ELEMENTS) return vec3(1.0);
+    if (elem == BLACKHOLE) return vec3(0.0);
+    if (elem == VOID) return vec3(0.1, 0.0, 0.15);
+    if (elements[elem].gemstone == 1) return elements[elem].color.rgb;
+    if (elem == WATER) return vec3(0.7, 0.8, 1.0);
+    if (elem == LAVA) return vec3(1.0, 0.6, 0.2);
+    return vec3(1.0);
+}
+
+// Read radiance from a specific cascade level at a probe+ray index
+vec4 readCascade(int level, int probeX, int probeY, int rayIdx) {
+    int pcx = probeCountX[level];
+    int pcy = probeCountY[level];
+
+    // Clamp probe coordinates
+    probeX = clamp(probeX, 0, pcx - 1);
+    probeY = clamp(probeY, 0, pcy - 1);
+
+    int numRays = BASE_RAYS * (1 << level);
+    int idx = cascadeOffsets[level] + (probeY * pcx + probeX) * numRays + rayIdx;
+    return cascadeData[idx];
+}
+
+// Write radiance to current cascade level
+void writeCascade(int level, int probeX, int probeY, int rayIdx, vec4 value) {
+    int pcx = probeCountX[level];
+    int numRays = BASE_RAYS * (1 << level);
+    int idx = cascadeOffsets[level] + (probeY * pcx + probeX) * numRays + rayIdx;
+    cascadeData[idx] = value;
+}
+
+// Bilinear interpolation of cascade N+1 at a world-space position and angle
+vec4 sampleUpperCascade(int upperLevel, vec2 worldPos, float angle) {
+    if (upperLevel >= numCascades) return vec4(0.0);
+
+    int upperPcx = probeCountX[upperLevel];
+    int upperPcy = probeCountY[upperLevel];
+    int upperSpacing = 1 << upperLevel;
+    int upperRays = BASE_RAYS * (1 << upperLevel);
+
+    // Convert world position to probe-space coordinates (continuous)
+    vec2 probeCoord = worldPos / float(upperSpacing) - 0.5;
+
+    // Bilinear probe indices
+    int px0 = int(floor(probeCoord.x));
+    int py0 = int(floor(probeCoord.y));
+    int px1 = px0 + 1;
+    int py1 = py0 + 1;
+    float fx = fract(probeCoord.x);
+    float fy = fract(probeCoord.y);
+
+    // Angular interpolation
+    // Map angle [0, 2*PI) to ray index in the upper cascade
+    float normalizedAngle = angle / (2.0 * 3.14159265);
+    if (normalizedAngle < 0.0) normalizedAngle += 1.0;
+
+    // FIX: Subtract 0.5 to correctly align the half-texel ray centers!
+    float rayCoord = normalizedAngle * float(upperRays) - 0.5;
+    if (rayCoord < 0.0) rayCoord += float(upperRays);
+
+    int r0 = int(floor(rayCoord)) % upperRays;
+    int r1 = (r0 + 1) % upperRays;
+    float fr = fract(rayCoord);
+
+    // Sample 8 points: 4 spatial * 2 angular, then bilinear+lerp
+    vec4 s00r0 = readCascade(upperLevel, px0, py0, r0);
+    vec4 s10r0 = readCascade(upperLevel, px1, py0, r0);
+    vec4 s01r0 = readCascade(upperLevel, px0, py1, r0);
+    vec4 s11r0 = readCascade(upperLevel, px1, py1, r0);
+
+    vec4 s00r1 = readCascade(upperLevel, px0, py0, r1);
+    vec4 s10r1 = readCascade(upperLevel, px1, py0, r1);
+    vec4 s01r1 = readCascade(upperLevel, px0, py1, r1);
+    vec4 s11r1 = readCascade(upperLevel, px1, py1, r1);
+
+    // Bilinear spatial interpolation for each angular sample
+    vec4 interpR0 = mix(mix(s00r0, s10r0, fx), mix(s01r0, s11r0, fx), fy);
+    vec4 interpR1 = mix(mix(s00r1, s10r1, fx), mix(s01r1, s11r1, fx), fy);
+
+    // Angular interpolation
+    return mix(interpR0, interpR1, fr);
+}
+
+void main() {
+    // Each invocation handles one probe+ray pair at the current cascade level
+    int N = cascadeLevel;
+    int pcx = probeCountX[N];
+    int pcy = probeCountY[N];
+    int numRays = BASE_RAYS * (1 << N);
+    int totalProbes = pcx * pcy;
+    int totalWork = totalProbes * numRays;
+
+    uint gid = gl_GlobalInvocationID.x;
+    if (gid >= uint(totalWork)) return;
+
+    // Decode probe index and ray index
+    int rayIdx   = int(gid) % numRays;
+    int probeIdx = int(gid) / numRays;
+    int probeX   = probeIdx % pcx;
+    int probeY   = probeIdx / pcx;
+
+    // Probe center in world space
+    int spacing = 1 << N;
+    vec2 probeCenter = (vec2(probeX, probeY) + 0.5) * float(spacing);
+
+    // Ray direction: evenly spaced angles
+    // Add a half-step offset for better coverage
+    float angleStep = 2.0 * 3.14159265 / float(numRays);
+    float angle = angleStep * (float(rayIdx) + 0.5);
+    vec2 dir = vec2(cos(angle), sin(angle));
+
+    // Tracing interval for this cascade level
+    // Level N traces from 2^N to 2^(N+1) pixels
+    float rangeStart = float(spacing);          // 2^N
+    float rangeEnd   = float(spacing) * 2.0;    // 2^(N+1)
+
+    // For cascade 0, start from 0 (right at the probe)
+    if (N == 0) rangeStart = 0.0;
+
+    // Ray march through the interval
+    vec3 accumulatedLight = vec3(0.0);
+    float transmittance = 1.0;     // How much light can still pass through
+    vec3 tint = vec3(1.0);         // Accumulated color tint from transparent materials
+
+    float stepSize = 1.0;  // March 1 pixel at a time for accuracy
+    int maxSteps = int(rangeEnd - rangeStart);
+
+    for (int step = 0; step < maxSteps && transmittance > 0.01; step++) {
+        float t = rangeStart + float(step) * stepSize + 0.5;
+        ivec2 samplePos = ivec2(probeCenter + dir * t);
+
+        if (!inBounds(samplePos)) {
+            // If we hit the top ceiling, inject the sky light ONCE
+            if (skyEnabled && samplePos.y >= worldSize.y - 1) {
+                float sunElevation = sin(timeOfDay * 3.14159);
+                vec3 skyLight;
+                if (sunElevation < 0.3) {
+                    float t = max(sunElevation, 0.0) / 0.3;
+                    skyLight = mix(vec3(0.05, 0.03, 0.08), vec3(1.0, 0.5, 0.2), t);
+                } else {
+                    skyLight = vec3(1.0, 0.98, 0.92);
+                }
+                float skyFactor = max(sunElevation, 0.0);
+                accumulatedLight += skyLight * skyFactor * transmittance * 2.0;
+            }
+            // Kill the ray's transmittance so it doesn't fetch the upper cascade
+            transmittance = 0.0;
+            break;
+        }
+
+        // Read the radiance field (emission + opacity)
+        vec4 rf = imageLoad(radianceField, samplePos);
+        vec3 emission = rf.rgb;
+        float opacity = rf.a;
+
+        // Material tint for transparent materials
+        uint elem = imageLoad(stateIn, samplePos).r;
+        vec3 matTint = getMaterialTint(elem);
+
+        // Accumulate emission weighted by current transmittance
+        accumulatedLight += emission * opacity * transmittance * tint;
+
+        // Update transmittance and tint
+        transmittance *= (1.0 - opacity);
+        tint *= matTint;
+    }
+
+    // If there's remaining transmittance and we're not the highest cascade,
+    // fetch the incoming radiance from the next cascade up
+    if (transmittance > 0.01 && N + 1 < numCascades) {
+        // Sample point is at the END of our tracing interval
+        vec2 samplePoint = probeCenter + dir * rangeEnd;
+        vec4 upperRadiance = sampleUpperCascade(N + 1, samplePoint, angle);
+
+        // Merge: the upper cascade's radiance passes through our remaining transmittance
+        accumulatedLight += upperRadiance.rgb * transmittance * tint;
+    }
+
+    // Write result: RGB = radiance along this ray, A = remaining transmittance
+    writeCascade(N, probeX, probeY, rayIdx, vec4(accumulatedLight, transmittance));
+}

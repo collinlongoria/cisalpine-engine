@@ -50,8 +50,7 @@ void main() {
 
     // Empty pixels
     if (elem == EMPTY) {
-        vec3 ambientGlow = light.rgb * 0.08;
-        vec3 final = color.rgb + ambientGlow;
+        vec3 final = color.rgb + light.rgb;
         imageStore(displayOut, pos, vec4(clamp(final, 0.0, 1.0), color.a));
         return;
     }
