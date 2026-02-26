@@ -10,19 +10,28 @@ layout(rgba8,   binding = 4) uniform writeonly image2D  displayOut;
 layout(rgba8,   binding = 5) uniform readonly  image2D  skyIn;
 
 struct ElementData {
-    vec4 color;
-    int type;
-    float density;
-    float viscosity;
-    float probability;
-    int flammability;
-    int glow;
-    int maxLife;
-    int gemstone;
-    float lightRadius;
-    float lightIntensity;
-    float ior;
-    int _pad;
+    vec4 color;                // 0-15
+    int type;                  // 16-19
+    float density;             // 20-23
+    float viscosity;           // 24-27
+    float probability;         // 28-31
+    int flammability;          // 32-35
+    int glow;                  // 36-39
+    int maxLife;               // 40-43
+    int gemstone;              // 44-47
+    float lightRadius;         // 48-51
+    float lightIntensity;      // 52-55
+    float ior;                 // 56-59
+    float baseTemperature;     // 60-63
+    float conductivity;        // 64-67
+    float specificHeat;        // 68-71
+    float opacity;             // 72-75
+    float specularPower;       // 76-79
+    vec4 transmissionTint;     // 80-95
+    float baseHeight;          // 96-99
+    float colorVariation;      // 100-103
+    int animType;              // 104-107
+    int _pad;                  // 108-111
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
@@ -58,11 +67,9 @@ void main() {
 
     // Empty pixels: show sky/background with any light that passed through
     if (elem == EMPTY) {
-        // For empty pixels, the lightmap contains indirect light bouncing around
-        // Add it subtly to the sky/background color
-        vec3 base = color.rgb;  // Sky or background from render pass
+        vec3 base = color.rgb;
         vec3 indirect = light.rgb;
-        vec3 final = base + indirect * 0.3;  // Subtle indirect contribution to empty space
+        vec3 final = base + indirect * 0.3;
         imageStore(displayOut, pos, vec4(clamp(final, 0.0, 1.0), color.a));
         return;
     }
@@ -80,7 +87,7 @@ void main() {
     // Self-emitting elements
     bool isSelfLit = false;
     if (elem < MAX_ELEMENTS) {
-        if (elements[elem].glow == 1 || elem == FIRE) {
+        if (elements[elem].glow == 1 || elements[elem].animType == 2) { // animType 2 = Fire
             isSelfLit = true;
         }
     }

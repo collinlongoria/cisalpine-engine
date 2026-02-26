@@ -6,19 +6,28 @@ layout(rgba16f, binding = 0) uniform readonly image2D radianceField;
 layout(rgba8ui, binding = 1) uniform readonly uimage2D stateIn;
 
 struct ElementData {
-    vec4 color;
-    int type;
-    float density;
-    float viscosity;
-    float probability;
-    int flammability;
-    int glow;
-    int maxLife;
-    int gemstone;
-    float lightRadius;
-    float lightIntensity;
-    float ior;
-    int _pad;
+    vec4 color;                // 0-15
+    int type;                  // 16-19
+    float density;             // 20-23
+    float viscosity;           // 24-27
+    float probability;         // 28-31
+    int flammability;          // 32-35
+    int glow;                  // 36-39
+    int maxLife;               // 40-43
+    int gemstone;              // 44-47
+    float lightRadius;         // 48-51
+    float lightIntensity;      // 52-55
+    float ior;                 // 56-59
+    float baseTemperature;     // 60-63
+    float conductivity;        // 64-67
+    float specificHeat;        // 68-71
+    float opacity;             // 72-75
+    float specularPower;       // 76-79
+    vec4 transmissionTint;     // 80-95
+    float baseHeight;          // 96-99
+    float colorVariation;      // 100-103
+    int animType;              // 104-107
+    int _pad;                  // 108-111
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
@@ -60,22 +69,16 @@ bool inBounds(ivec2 pos) {
     return pos.x >= 0 && pos.x < worldSize.x && pos.y >= 0 && pos.y < worldSize.y;
 }
 
+// Phase 3: getMaterialTint is REMOVED. Tint is read directly from element buffer.
 vec3 getMaterialTint(uint elem) {
     if (elem == EMPTY || elem >= MAX_ELEMENTS) return vec3(1.0);
-    if (elem == BLACKHOLE) return vec3(0.0);
-    if (elem == VOID) return vec3(0.1, 0.0, 0.15);
-    if (elements[elem].gemstone == 1) return elements[elem].color.rgb;
-    if (elem == WATER) return vec3(0.7, 0.8, 1.0);
-    if (elem == LAVA) return vec3(1.0, 0.6, 0.2);
-    return vec3(1.0);
+    // Read tint directly from the data-driven transmissionTint field
+    return elements[elem].transmissionTint.rgb;
 }
 
 // Compute interval scale factor using geometric sequence
-// intervalScale(0) = 0, intervalScale(1) = 1, intervalScale(2) = 4, intervalScale(3) = 16, ...
-// So cascade N traces from intervalScale(N) to intervalScale(N+1) in units of BASE_INTERVAL
 float intervalScale(int cascadeIndex) {
     if (cascadeIndex <= 0) return 0.0;
-    // Start = sum of previous lengths = BASE_INTERVAL * (4^0 + 4^1 + ... + 4^(N-1)) = BASE_INTERVAL * (4^N - 1) / 3
     return float(uint(1) << (2 * cascadeIndex));
 }
 
@@ -101,7 +104,6 @@ void writeCascade(int level, int probeX, int probeY, int rayIdx, vec4 value) {
 }
 
 // Merge two connected intervals with respect to their visibility term
-// near.a = 1.0 means transparent, 0.0 means fully occluded
 vec4 mergeIntervals(vec4 near, vec4 far) {
     return vec4(near.rgb + far.rgb * near.a, near.a * far.a);
 }
@@ -242,7 +244,7 @@ void main() {
         vec3 emission = rf.rgb;
         float opacity = rf.a;
 
-        // Material tint for transparent materials
+        // Phase 3: Material tint from data-driven transmissionTint
         uint elem = imageLoad(stateIn, samplePos).r;
         vec3 matTint = getMaterialTint(elem);
 
@@ -261,7 +263,7 @@ void main() {
         vec2 samplePoint = probeCenter;
         vec4 upperRadiance = sampleUpperCascade(N + 1, samplePoint, angle);
 
-        upperRadiance.rgb *= tint; // think this may have fixed tint bug?
+        upperRadiance.rgb *= tint;
 
         vec4 nearInterval = vec4(accumulatedLight, visibility);
         vec4 merged = mergeIntervals(nearInterval, upperRadiance);

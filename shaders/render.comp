@@ -8,19 +8,28 @@ layout(rgba16f, binding = 2) uniform writeonly image2D normalOut;
 layout(rgba8,   binding = 5) uniform writeonly image2D skyOut;
 
 struct ElementData {
-    vec4 color;
-    int type;
-    float density;
-    float viscosity;
-    float probability;
-    int flammability;
-    int glow;
-    int maxLife;
-    int gemstone;
-    float lightRadius;
-    float lightIntensity;
-    float ior;
-    int _pad;
+    vec4 color;                // 0-15
+    int type;                  // 16-19
+    float density;             // 20-23
+    float viscosity;           // 24-27
+    float probability;         // 28-31
+    int flammability;          // 32-35
+    int glow;                  // 36-39
+    int maxLife;               // 40-43
+    int gemstone;              // 44-47
+    float lightRadius;         // 48-51
+    float lightIntensity;      // 52-55
+    float ior;                 // 56-59
+    float baseTemperature;     // 60-63
+    float conductivity;        // 64-67
+    float specificHeat;        // 68-71
+    float opacity;             // 72-75
+    float specularPower;       // 76-79
+    vec4 transmissionTint;     // 80-95
+    float baseHeight;          // 96-99
+    float colorVariation;      // 100-103
+    int animType;              // 104-107
+    int _pad;                  // 108-111
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
@@ -32,6 +41,13 @@ uniform float time;
 uniform bool skyEnabled;
 uniform float timeOfDay;
 uniform bool showSun;
+
+// Animation type constants
+const int ANIM_NONE      = 0;
+const int ANIM_LIQUID    = 1;
+const int ANIM_FIRE      = 2;
+const int ANIM_VOID      = 3;
+const int ANIM_BLACKHOLE = 4;
 
 // Helpers
 
@@ -77,43 +93,36 @@ vec3 skyColor(float normalizedY, float tod, ivec2 pos, ivec2 size) {
     vec3 topColor, bottomColor;
 
     if (tod < 0.15) {
-        // Night to pre-dawn
         float t = tod / 0.15;
         topColor    = mix(nightTop, dawnTop, t * t);
         bottomColor = mix(nightBottom, dawnBottom, t * t);
     }
     else if (tod < 0.30) {
-        // Dawn to morning
         float t = (tod - 0.15) / 0.15;
         topColor    = mix(dawnTop, dayTop, t);
         bottomColor = mix(dawnBottom, dayBottom, t);
     }
     else if (tod < 0.50) {
-        // Morning to noon
         float t = (tod - 0.30) / 0.20;
         topColor    = mix(dayTop, noonTop, t);
         bottomColor = mix(dayBottom, noonBottom, t);
     }
     else if (tod < 0.70) {
-        // Noon to afternoon
         float t = (tod - 0.50) / 0.20;
         topColor    = mix(noonTop, dayTop, t);
         bottomColor = mix(noonBottom, dayBottom, t);
     }
     else if (tod < 0.80) {
-        // Afternoon to sunset
         float t = (tod - 0.70) / 0.10;
         topColor    = mix(dayTop, sunsetTop, t);
         bottomColor = mix(dayBottom, sunsetBottom, t);
     }
     else if (tod < 0.90) {
-        // Sunset to dusk
         float t = (tod - 0.80) / 0.10;
         topColor    = mix(sunsetTop, dawnTop * 0.6, t);
         bottomColor = mix(sunsetBottom, dawnBottom * 0.5, t);
     }
     else {
-        // Dusk to night
         float t = (tod - 0.90) / 0.10;
         topColor    = mix(dawnTop * 0.6, nightTop, t);
         bottomColor = mix(dawnBottom * 0.5, nightBottom, t);
@@ -134,7 +143,6 @@ vec3 skyColor(float normalizedY, float tod, ivec2 pos, ivec2 size) {
 
     // Sun disc
     if (showSun && sunElevation > -0.05) {
-        // Sun position: horizontal center, vertical based on elevation
         float sunX = 0.5;
         float sunY = -0.2 + sunElevation * 1.0;
 
@@ -147,11 +155,9 @@ vec3 skyColor(float normalizedY, float tod, ivec2 pos, ivec2 size) {
 
         float distToSun = sqrt(dx * dx + dy * dy);
 
-        // Sun disc size
         float sunRadius = 0.04;
         float glowRadius = 0.15;
 
-        // Sun color: white at noon, orange at dawn/dusk
         vec3 sunColor;
         if (sunElevation < 0.3) {
             float t = sunElevation / 0.3;
@@ -161,16 +167,13 @@ vec3 skyColor(float normalizedY, float tod, ivec2 pos, ivec2 size) {
         }
 
         if (distToSun < glowRadius) {
-            // Start the glow falloff from the center (0.0) out to glowRadius
             float glow = 1.0 - smoothstep(0.0, glowRadius, distToSun);
-            glow = glow * glow; // non-linear falloff
+            glow = glow * glow;
             float glowStrength = clamp(sunElevation * 3.0 + 0.2, 0.0, 0.6);
             sky += sunColor * glow * glowStrength;
         }
 
         if (distToSun < sunRadius) {
-            // Fixed smoothstep: lower bound first, upper bound second.
-            // This fades from 1.0 (opaque center) to 0.0 (transparent edge).
             float softEdge = 1.0 - smoothstep(sunRadius * 0.8, sunRadius, distToSun);
             sky = mix(sky, sunColor, softEdge * clamp(sunElevation * 5.0 + 0.5, 0.0, 1.0));
         }
@@ -179,24 +182,21 @@ vec3 skyColor(float normalizedY, float tod, ivec2 pos, ivec2 size) {
     return clamp(sky, 0.0, 1.0);
 }
 
-// Normal Computation
+// Phase 3: Data-driven height map
 float getHeight(ivec2 pos, ivec2 size) {
     uvec4 state = safeLoad(pos, size);
     uint elem = state.r;
     if (elem == EMPTY || elem >= MAX_ELEMENTS) return 0.0;
 
-    float baseHeight = 1.0;
+    // Read base height directly from element data
+    float baseHeight = elements[elem].baseHeight;
 
     int type = elements[elem].type;
 
-    // Static elements: solid, high relief
-    if (type == 0) baseHeight = 1.0;
-    // Granular: medium, slightly noisy
-    else if (type == 1) baseHeight = 0.8 + hashNoise(pos) * 0.2;
-    // Liquid: very flat/smooth
-    else if (type == 2) baseHeight = 0.3;
-    // Gas: barely any height
-    else if (type == 3) baseHeight = 0.1;
+    // Granular: add slight noise to base height
+    if (type == 1) {
+        baseHeight += hashNoise(pos) * 0.2;
+    }
 
     // Gemstones: faceted height for sparkle
     if (elements[elem].gemstone == 1) {
@@ -204,22 +204,19 @@ float getHeight(ivec2 pos, ivec2 size) {
         baseHeight = 0.7 + facet * 0.3;
     }
 
-    // Void: deep depression
-    if (elem == VOID) baseHeight = -0.5;
-
-    // BlackHole: extreme depth
-    if (elem == BLACKHOLE) baseHeight = -1.0;
-
     return baseHeight;
 }
 
+// Normal Computation using animType
 vec3 computeNormal(ivec2 pos, ivec2 size, uint element) {
     if (element == EMPTY || element >= MAX_ELEMENTS) {
         return vec3(0.0, 0.0, 1.0);
     }
 
     int type = elements[element].type;
+    int anim = elements[element].animType;
 
+    // Gemstone normals (shimmer)
     if (elements[element].gemstone == 1) {
         float facetSeed = floor(hashNoise(pos) * 6.0);
         float shimmerPhase = time * 2.0 + facetSeed * 1.047;
@@ -229,18 +226,19 @@ vec3 computeNormal(ivec2 pos, ivec2 size, uint element) {
         return normalize(vec3(nx, ny, nz));
     }
 
-    if (element == BLACKHOLE) {
+    // Phase 3: Use animType for animation-driven normals
+    if (anim == ANIM_BLACKHOLE) {
         float angle = time * 3.0 + hashNoise(pos) * 6.28;
         float warp = 0.6;
         return normalize(vec3(sin(angle) * warp, cos(angle) * warp, 0.3));
     }
 
-    if (element == VOID) {
+    if (anim == ANIM_VOID) {
         float distort = sin(time * 2.0 + hashNoise(pos) * 10.0) * 0.3;
         return normalize(vec3(distort, distort * 0.5, 0.8));
     }
 
-    if (type == 2) {
+    if (anim == ANIM_LIQUID || type == 2) {
         float wave = sin(time * 2.0 + float(pos.x) * 0.5) * 0.15;
         float wave2 = cos(time * 1.5 + float(pos.y) * 0.3) * 0.1;
         return normalize(vec3(wave, wave2, 1.0));
@@ -268,20 +266,15 @@ vec3 computeNormal(ivec2 pos, ivec2 size, uint element) {
     return normalize(vec3(-dx, -dy, 0.5));
 }
 
+// Phase 3: Data-driven specular power (replaces getSpecularPower)
+// Now simply reads from the element buffer
 float getSpecularPower(uint element) {
     if (element == EMPTY || element >= MAX_ELEMENTS) return 0.0;
-    if (elements[element].gemstone == 1) return 64.0;
-    int type = elements[element].type;
-    if (type == 2) return 16.0;
-    if (element == OBSIDIAN) return 24.0;
-    if (element == STONE) return 4.0;
-    if (element == LIGHT) return 0.0;
-    if (element == BLACKHOLE) return 32.0;
-    if (element == VOID) return 8.0;
-    return 1.0;
+    return elements[element].specularPower;
 }
 
 vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
+    // Phase 3: Use data-driven colorVariation instead of hardcoded 0.1
     float variation = hashNoise(pos);
 
     if (element == EMPTY) {
@@ -298,9 +291,11 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
     }
 
     vec4 baseColor = elements[element].color;
-    vec3 varied = baseColor.rgb + (variation - 0.5) * 0.1;
+    float colorVar = elements[element].colorVariation;
+    vec3 varied = baseColor.rgb + (variation - 0.5) * colorVar;
 
     int type = elements[element].type;
+    int anim = elements[element].animType;
 
     // BOMB
     if (element == BOMB) {
@@ -316,8 +311,8 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
         return vec4(clamp(bombColor, 0.0, 1.0), 1.0);
     }
 
-    // VOID
-    if (element == VOID) {
+    // Phase 3: Use animType for special rendering instead of element ID checks
+    if (anim == ANIM_VOID) {
         float distort = sin(time * 1.5 + variation * 10.0 + float(pos.x) * 0.3) * 0.03;
         vec3 voidColor = vec3(0.02 + distort, 0.0, 0.05 + distort * 2.0);
         float edgeNoise = hashNoise2(pos);
@@ -326,14 +321,14 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
     }
 
     // Glowing elements - pulsing effect
-    if (elements[element].glow == 1 && element != FIRE && element != LIGHT) {
+    if (elements[element].glow == 1 && anim != ANIM_FIRE && element != LIGHT) {
         float pulse = sin(time * 3.0 + variation * 6.28) * 0.5 + 0.5;
         varied.g += pulse * 0.3;
         varied.b += pulse * 0.1;
     }
 
-    // BLACK HOLE
-    if (element == BLACKHOLE) {
+    // Phase 3: BlackHole via animType
+    if (anim == ANIM_BLACKHOLE) {
         vec3 holeColor = vec3(0.0);
         float angle = atan(float(pos.y), float(pos.x)) + time * 2.0;
         float ring = sin(angle * 3.0 + variation * 6.28) * 0.5 + 0.5;
@@ -349,8 +344,8 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
         return vec4(varied, 1.0);
     }
 
-    // Fire
-    if (element == FIRE) {
+    // Phase 3: Fire via animType
+    if (anim == ANIM_FIRE) {
         float flicker = sin(time * 10.0 + variation * 10.0) * 0.5 + 0.5;
         float lifeFactor = float(life) / 255.0;
         varied = vec3(1.0, 0.5 * lifeFactor + flicker * 0.3, 0.1);
@@ -399,8 +394,8 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
         varied += sparkle * 0.3;
     }
 
-    // Liquid shimmer
-    if (type == 2) {
+    // Liquid shimmer (also triggered by animType)
+    if (type == 2 || anim == ANIM_LIQUID) {
         float shimmer = sin(time * 2.0 + float(pos.x) * 0.5 + float(pos.y) * 0.3) * 0.05;
         varied += shimmer;
     }
@@ -421,7 +416,7 @@ void main() {
     vec4 color = getColor(element, life, pos, size);
     imageStore(colorOut, pos, color);
 
-    // Output normal + specular
+    // Output normal + specular (Phase 3: data-driven specular)
     vec3 normal = computeNormal(pos, size, element);
     float specPower = getSpecularPower(element);
     imageStore(normalOut, pos, vec4(normal, specPower));

@@ -8,23 +8,47 @@ layout(rgba16f, binding = 1) uniform writeonly image2D forceOut;
 layout(rgba8ui, binding = 2) uniform readonly  uimage2D stateIn;
 
 struct ElementData {
-    vec4 color;
-    int type;
-    float density;
-    float viscosity;
-    float probability;
-    int flammability;
-    int glow;
-    int maxLife;
-    int gemstone;
-    float lightRadius;
-    float lightIntensity;
-    float ior;
-    int _pad;
+    vec4 color;                // 0-15
+    int type;                  // 16-19
+    float density;             // 20-23
+    float viscosity;           // 24-27
+    float probability;         // 28-31
+    int flammability;          // 32-35
+    int glow;                  // 36-39
+    int maxLife;               // 40-43
+    int gemstone;              // 44-47
+    float lightRadius;         // 48-51
+    float lightIntensity;      // 52-55
+    float ior;                 // 56-59
+    float baseTemperature;     // 60-63
+    float conductivity;        // 64-67
+    float specificHeat;        // 68-71
+    float opacity;             // 72-75
+    float specularPower;       // 76-79
+    vec4 transmissionTint;     // 80-95
+    float baseHeight;          // 96-99
+    float colorVariation;      // 100-103
+    int animType;              // 104-107
+    int _pad;                  // 108-111
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
     ElementData elements[];
+};
+
+// Phase 1: Effector List SSBO (scatter approach)
+struct Effector {
+    vec2 position;       // 8 bytes
+    uint type;           // 4 bytes (0 = Black Hole, 1 = Bomb)
+    float strength;      // 4 bytes
+};
+
+layout(std430, binding = 3) buffer EffectorList {
+    uint effectorCount;
+    uint _pad1;
+    uint _pad2;
+    uint _pad3;
+    Effector effectors[];
 };
 
 uniform vec2  worldSize;
@@ -82,46 +106,27 @@ void main() {
         force = mix(force, neighborForce, FORCE_SPREAD);
     }
 
-    // Black Hole attraction field
-    int bhRange = int(BLACK_HOLE_RANGE);
-    for (int dy = -bhRange; dy <= bhRange; dy++) {
-        for (int dx = -bhRange; dx <= bhRange; dx++) {
-            ivec2 sp = pos + ivec2(dx, dy);
-            if (!inBounds(sp)) continue;
+    // Phase 1: Iterate over the effector list (scatter approach)
+    // This replaces the old spatial scanning loops for black holes and bombs
+    uint count = min(effectorCount, uint(MAX_EFFECTORS));
+    for (uint i = 0u; i < count; i++) {
+        Effector eff = effectors[i];
+        vec2 toEffector = eff.position - vec2(pos);
+        float dist = length(toEffector);
 
-            uint sElem = imageLoad(stateIn, sp).r;
-            if (sElem != BLACKHOLE) continue;
-
-            vec2 toHole = vec2(sp - pos);
-            float dist = length(toHole);
+        if (eff.type == 0u) {
+            // Black Hole: attraction force
             if (dist < 1.0 || dist > BLACK_HOLE_RANGE) continue;
 
-            // Inverse-square pull
-            vec2 dir = normalize(toHole);
+            vec2 dir = normalize(toEffector);
             float strength = BLACK_HOLE_PULL / (dist * dist) * BLACK_HOLE_RANGE;
             force += dir * strength;
         }
-    }
+        else if (eff.type == 1u) {
+            // Bomb: explosion impulse (push away)
+            if (dist < 0.5 || dist > BOMB_RADIUS) continue;
 
-    // Bomb explosion injection
-    int bombRange = int(BOMB_RADIUS);
-    for (int dy = -bombRange; dy <= bombRange; dy++) {
-        for (int dx = -bombRange; dx <= bombRange; dx++) {
-            ivec2 sp = pos + ivec2(dx, dy);
-            if (!inBounds(sp)) continue;
-
-            uvec4 sState = imageLoad(stateIn, sp);
-            // Check for detonation flag: element is BOMB and B channel == 255
-            if (sState.r != BOMB) continue;
-            if (sState.b != 255u) continue;
-
-            vec2 awayFromBomb = vec2(pos - sp);
-            float dist = length(awayFromBomb);
-            if (dist < 0.5) continue; // Don't apply to self
-            if (dist > BOMB_RADIUS) continue;
-
-            vec2 dir = normalize(awayFromBomb);
-            // Force falls off with distance from bomb center
+            vec2 dir = normalize(-toEffector); // Away from bomb
             float falloff = 1.0 - (dist / BOMB_RADIUS);
             falloff = falloff * falloff; // Quadratic falloff
             force += dir * BOMB_FORCE * falloff;

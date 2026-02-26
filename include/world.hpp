@@ -30,7 +30,20 @@ static constexpr int CHUNK_SIZE = 32;  // Each chunk is 32x32 pixels
 static constexpr int RC_BASE_RAYS    = 4;   // Angular rays at cascade level 0
 static constexpr int RC_MAX_CASCADES = 8;   // Maximum cascade levels
 
-// Simulation settings
+static constexpr int MAX_EFFECTORS = 1024;  // Maximum active effectors per frame
+
+enum EffectorType : uint32_t {
+    EFFECTOR_BLACK_HOLE = 0,
+    EFFECTOR_BOMB       = 1
+};
+
+struct GPUEffector {
+    float posX;         // 4 bytes (offset 0)
+    float posY;         // 4 bytes (offset 4)
+    uint32_t type;      // 4 bytes (offset 8)
+    float strength;     // 4 bytes (offset 12)
+};
+
 struct SimulationSettings {
     // Simulation loops per frame
     int stepsPerFrame = 4;
@@ -39,15 +52,14 @@ struct SimulationSettings {
     bool chunkSleepEnabled = true;
 };
 
-// Rendering Settings
 struct RenderSettings {
     glm::vec4 backgroundColor = glm::vec4(0.05f, 0.05f, 0.08f, 1.0f);
     bool glowEnabled = true;
     float glowIntensity = 0.25f;
-    float glowRadius = 3.3f;     // Kept for UI compat, now controls RC cascade count
+    float glowRadius = 3.3f;
     float ambientLight = 0.65f;
     float specularStrength = 0.6f;
-    int lightBounces = 3;         // Now repurposed: number of RC cascade levels (1-7)
+    int lightBounces = 3;
 
     // Sky system
     bool skyEnabled = true;
@@ -55,10 +67,9 @@ struct RenderSettings {
     bool showSun = true;
 
     // Radiance Cascades specific
-    int rcCascadeLevels = 5;      // Number of cascade levels (1-7)
+    int rcCascadeLevels = 5;
 };
 
-// Struct matching GL_DISPATCH_INDIRECT_BUFFER layout
 struct DispatchIndirectCommand {
     GLuint num_groups_x;
     GLuint num_groups_y;
@@ -75,6 +86,7 @@ enum class DebugViewMode {
     Sky,           // Sky texture only
     ForceField,    // Force field visualization
     RadianceField, // Emitter + opacity G-buffer
+    Temperature,   // Temperature field visualization
     COUNT
 };
 
@@ -88,6 +100,7 @@ inline const char* debugViewModeName(DebugViewMode mode) {
         case DebugViewMode::Sky:           return "Sky";
         case DebugViewMode::ForceField:    return "Force Field";
         case DebugViewMode::RadianceField: return "Radiance Field";
+        case DebugViewMode::Temperature:   return "Temperature";
         default: return "Unknown";
     }
 }
@@ -146,10 +159,11 @@ enum GPUTimerIndex {
     TIMER_SIMULATION = 0,
     TIMER_FORCE_UPDATE,
     TIMER_CHUNK_BUILD,
+    TIMER_TEMPERATURE,    // Temperature diffusion pass
     TIMER_RENDER,
-    TIMER_RC_EMITTERS,    // NEW: Radiance field extraction
-    TIMER_RC_CASCADE,     // NEW: Cascade merge passes
-    TIMER_RC_RESOLVE,     // NEW: Cascade resolve to lightmap
+    TIMER_RC_EMITTERS,    // Radiance field extraction
+    TIMER_RC_CASCADE,     // Cascade merge passes
+    TIMER_RC_RESOLVE,     // Cascade resolve to lightmap
     TIMER_COMPOSITE,
     TIMER_QUAD_BLIT,
     TIMER_COUNT
@@ -160,6 +174,7 @@ inline const char* gpuTimerName(int idx) {
         case TIMER_SIMULATION:   return "Simulation";
         case TIMER_FORCE_UPDATE: return "Force Update";
         case TIMER_CHUNK_BUILD:  return "Chunk Build";
+        case TIMER_TEMPERATURE:  return "Temperature";
         case TIMER_RENDER:       return "Render";
         case TIMER_RC_EMITTERS:  return "RC Emitters";
         case TIMER_RC_CASCADE:   return "RC Cascade";
@@ -201,6 +216,7 @@ public:
     GLuint getCurrentTexture() const { return stateTextures[currentBuffer]; }
     GLuint getDisplayTexture() const { return displayTexture; }
     GLuint getCurrentForceTexture() const { return forceTextures[currentForceBuffer]; }
+    GLuint getCurrentTemperatureTexture() const { return temperatureTextures[currentTempBuffer]; }
 
     void wakeChunkAt(int worldX, int worldY);
 
@@ -241,7 +257,15 @@ private:
     GLuint forceTextures[2] = {0, 0};
     int currentForceBuffer = 0;
 
-    // === Chunk Sleep System ===
+    // Effector List SSBO
+    GLuint effectorSSBO = 0;
+
+    // Temperature System
+    GLuint temperatureTextures[2] = {0, 0};
+    int currentTempBuffer = 0;
+    Shader temperatureShader;
+
+    // Chunk Sleep System
     int chunkGridWidth = 0;
     int chunkGridHeight = 0;
     int totalChunks = 0;
@@ -293,11 +317,14 @@ private:
     void createTextures();
     void createQuad();
     void createChunkBuffers();
+    void createEffectorBuffer();
     void swapBuffers();
     void swapForceBuffers();
     void swapChunkGrids();
+    void swapTemperatureBuffers();
     void simulationStep();
     void forceUpdateStep();
+    void temperatureStep();
 
     // Chunk helpers
     void wakeAllChunks();

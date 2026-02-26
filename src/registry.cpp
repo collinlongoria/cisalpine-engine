@@ -51,6 +51,15 @@ void Registry::load(const std::string &filename) {
         d.lightRadius = 0.0f;
         d.lightIntensity = 0.0f;
         d.ior = 1.0f;
+        d.baseTemperature = 20.0f;
+        d.conductivity = 0.1f;
+        d.specificHeat = 1.0f;
+        d.opacity = 0.85f;
+        d.specularPower = 1.0f;
+        d.transmissionTint = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        d.baseHeight = 1.0f;
+        d.colorVariation = 0.1f;
+        d.animType = 0;
         d._pad = 0;
     }
 
@@ -83,7 +92,64 @@ void Registry::load(const std::string &filename) {
         d.gemstone = val.value("gemstone", false) ? 1 : 0;
         d.lightRadius = val.value("lightRadius", 0.0f);
         d.lightIntensity = val.value("lightIntensity", 0.0f);
-        d.ior = val.value("ior", 1.45f); // default IOR for glass-like
+        d.ior = val.value("ior", 1.45f);
+        d.baseTemperature = val.value("baseTemperature", 20.0f);
+        d.conductivity = val.value("conductivity", 0.1f);
+        d.specificHeat = val.value("specificHeat", 1.0f);
+
+        if (val.contains("opacity")) {
+            d.opacity = val["opacity"].get<float>();
+        } else {
+            int type = d.type;
+            if (type == 3) d.opacity = 0.05f;        // Gas
+            else if (type == 2) d.opacity = 0.15f;    // Liquid
+            else if (d.gemstone == 1) d.opacity = 0.2f; // Gemstone
+            else d.opacity = 0.85f;                    // Static / Granular
+        }
+
+        // Specular Power
+        if (val.contains("specularPower")) {
+            d.specularPower = val["specularPower"].get<float>();
+        } else {
+            // Smart defaults matching old getSpecularPower() logic
+            if (d.gemstone == 1) d.specularPower = 64.0f;
+            else if (d.type == 2) d.specularPower = 16.0f;
+            else d.specularPower = 1.0f;
+        }
+
+        // Transmission Tint
+        if (val.contains("transmissionTint")) {
+            auto t = val["transmissionTint"];
+            d.transmissionTint = glm::vec4(
+                t[0].get<float>(),
+                t[1].get<float>(),
+                t[2].get<float>(),
+                t.size() > 3 ? t[3].get<float>() : 1.0f
+            );
+        } else {
+            d.transmissionTint = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
+        }
+
+        // Base Height
+        if (val.contains("baseHeight")) {
+            d.baseHeight = val["baseHeight"].get<float>();
+        } else {
+            int type = d.type;
+            if (type == 0) d.baseHeight = 1.0f;       // Static: solid, high relief
+            else if (type == 1) d.baseHeight = 0.8f;   // Granular: medium
+            else if (type == 2) d.baseHeight = 0.3f;   // Liquid: very flat
+            else if (type == 3) d.baseHeight = 0.1f;   // Gas: barely any height
+        }
+
+        // Color Variation
+        d.colorVariation = val.value("colorVariation", 0.1f);
+
+        // Animation Type
+        if (val.contains("animType")) {
+            d.animType = parseAnimType(val["animType"].get<std::string>());
+        } else {
+            d.animType = 0; // None
+        }
         d._pad = 0;
 
         // CPU-only properties
@@ -99,7 +165,7 @@ void Registry::load(const std::string &filename) {
                  GL_STATIC_DRAW);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-    std::cout << "Loaded " << gpuData.size() << " elements from registry" << std::endl;
+    std::cout << "Loaded " << gpuData.size() << " elements from registry ("<< sizeof(GPUElementData) << " bytes per element)" << std::endl;
 }
 
 int Registry::parseType(const std::string& typeStr) {
@@ -108,6 +174,15 @@ int Registry::parseType(const std::string& typeStr) {
     if (typeStr == "Liquid") return 2;
     if (typeStr == "Gas") return 3;
     return 0; // Default to Static
+}
+
+int Registry::parseAnimType(const std::string& animStr) {
+    if (animStr == "None") return 0;
+    if (animStr == "Liquid") return 1;
+    if (animStr == "Fire") return 2;
+    if (animStr == "Void") return 3;
+    if (animStr == "BlackHole") return 4;
+    return 0; // Default to None
 }
 
 std::string Registry::getShaderHeader() const {

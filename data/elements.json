@@ -4,21 +4,48 @@
     "id": 0,
     "type": "Static",
     "color": [0.05, 0.05, 0.08, 1.0],
-    "density": 0
+    "density": 0,
+    "baseTemperature": 20.0,
+    "conductivity": 0.01,
+    "specificHeat": 1.0,
+    "opacity": 0.0,
+    "specularPower": 0.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 0.0,
+    "colorVariation": 0.0,
+    "animType": "None"
   },
   "Sand":
   {
     "id": 1,
     "type": "Granular",
     "color": [0.82, 0.74, 0.42, 1.0],
-    "density": 10
+    "density": 10,
+    "baseTemperature": 20.0,
+    "conductivity": 0.3,
+    "specificHeat": 0.8,
+    "opacity": 0.85,
+    "specularPower": 1.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 0.8,
+    "colorVariation": 0.1,
+    "animType": "None"
   },
   "Stone":
   {
     "id": 2,
     "type": "Static",
     "color": [0.4, 0.4, 0.45, 1.0],
-    "density": 100
+    "density": 100,
+    "baseTemperature": 20.0,
+    "conductivity": 0.8,
+    "specificHeat": 0.8,
+    "opacity": 0.85,
+    "specularPower": 4.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 1.0,
+    "colorVariation": 0.1,
+    "animType": "None"
   },
   "Water":
   {
@@ -27,7 +54,16 @@
     "color": [0.2, 0.4, 0.8, 0.85],
     "density": 5,
     "viscosity": 0.05,
-    "dispersion": 5
+    "dispersion": 5,
+    "baseTemperature": 20.0,
+    "conductivity": 0.6,
+    "specificHeat": 4.2,
+    "opacity": 0.15,
+    "specularPower": 16.0,
+    "transmissionTint": [0.7, 0.8, 1.0, 1.0],
+    "baseHeight": 0.3,
+    "colorVariation": 0.08,
+    "animType": "Liquid"
   },
   "Lava":
   {
@@ -36,7 +72,16 @@
     "color": [1.0, 0.3, 0.0, 1.0],
     "density": 20,
     "viscosity": 0.8,
-    "glow": true
+    "glow": true,
+    "baseTemperature": 1000.0,
+    "conductivity": 1.5,
+    "specificHeat": 1.0,
+    "opacity": 0.15,
+    "specularPower": 16.0,
+    "transmissionTint": [1.0, 0.6, 0.2, 1.0],
+    "baseHeight": 0.3,
+    "colorVariation": 0.12,
+    "animType": "Liquid"
   },
   "Wood":
   {
@@ -45,7 +90,16 @@
     "color": [0.4, 0.25, 0.1, 1.0],
     "density": 50,
     "flammable": true,
-    "burnChance": 0.05
+    "burnChance": 0.05,
+    "baseTemperature": 20.0,
+    "conductivity": 0.15,
+    "specificHeat": 1.7,
+    "opacity": 0.85,
+    "specularPower": 1.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 1.0,
+    "colorVariation": 0.1,
+    "animType": "None"
   },
   "Fire":
   {
@@ -54,7 +108,16 @@
     "color": [1.0, 0.5, 0.1, 0.9],
     "density": -1,
     "life": 255,
-    "glow": true
+    "glow": true,
+    "baseTemperature": 800.0,
+    "conductivity": 0.5,
+    "specificHeat": 1.0,
+    "opacity": 0.05,
+    "specularPower": 0.0,
+    "transmissionTint": [1.0, 0.7, 0.3, 1.0],
+    "baseHeight": 0.1,
+    "colorVariation": 0.15,
+    "animType": "Fire"
   },
   "Smoke":
   {
@@ -62,14 +125,32 @@
     "type": "Gas",
     "color": [0.5, 0.5, 0.5, 0.4],
     "density": -2,
-    "life": 200
+    "life": 200,
+    "baseTemperature": 80.0,
+    "conductivity": 0.02,
+    "specificHeat": 1.0,
+    "opacity": 0.05,
+    "specularPower": 0.0,
+    "transmissionTint": [0.8, 0.8, 0.8, 1.0],
+    "baseHeight": 0.1,
+    "colorVariation": 0.08,
+    "animType": "None"
   },
   "Dirt":
   {
     "id": 8,
     "type": "Granular",
     "color": [0.35, 0.25, 0.15, 1.0],
-    "density": 12
+    "density": 12,
+    "baseTemperature": 20.0,
+    "conductivity": 0.25,
+    "specificHeat": 0.9,
+    "opacity": 0.85,
+    "specularPower": 1.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 0.8,
+    "colorVariation": 0.12,
+    "animType": "None"
   },
   "Seed":
   {
@@ -78,7 +159,16 @@
     "color": [0.6, 0.8, 0.2, 1.0],
     "density": 8,
     "flammable": true,
-    "singleClick": true
+    "singleClick": true,
+    "baseTemperature": 20.0,
+    "conductivity": 0.1,
+    "specificHeat": 1.5,
+    "opacity": 0.85,
+    "specularPower": 1.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 0.8,
+    "colorVariation": 0.1,
+    "animType": "None"
   },
   "Grass":
   {
@@ -87,14 +177,32 @@
     "color": [0.1, 0.6, 0.1, 1.0],
     "density": 12,
     "flammable": true,
-    "burnChance": 0.3
+    "burnChance": 0.3,
+    "baseTemperature": 20.0,
+    "conductivity": 0.12,
+    "specificHeat": 1.5,
+    "opacity": 0.85,
+    "specularPower": 1.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 0.8,
+    "colorVariation": 0.12,
+    "animType": "None"
   },
   "Obsidian":
   {
     "id": 11,
     "type": "Static",
     "color": [0.15, 0.1, 0.2, 1.0],
-    "density": 200
+    "density": 200,
+    "baseTemperature": 20.0,
+    "conductivity": 0.9,
+    "specificHeat": 0.8,
+    "opacity": 0.85,
+    "specularPower": 24.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 1.0,
+    "colorVariation": 0.06,
+    "animType": "None"
   },
   "Plant":
   {
@@ -103,7 +211,16 @@
     "color": [0.15, 0.65, 0.1, 1.0],
     "density": 3,
     "flammable": true,
-    "burnChance": 0.4
+    "burnChance": 0.4,
+    "baseTemperature": 20.0,
+    "conductivity": 0.1,
+    "specificHeat": 1.5,
+    "opacity": 0.85,
+    "specularPower": 1.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 1.0,
+    "colorVariation": 0.12,
+    "animType": "None"
   },
   "Sapling":
   {
@@ -111,7 +228,16 @@
     "type": "Granular",
     "color": [0.3, 0.5, 0.15, 1.0],
     "density": 8,
-    "singleClick": true
+    "singleClick": true,
+    "baseTemperature": 20.0,
+    "conductivity": 0.1,
+    "specificHeat": 1.5,
+    "opacity": 0.85,
+    "specularPower": 1.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 0.8,
+    "colorVariation": 0.1,
+    "animType": "None"
   },
   "Light":
   {
@@ -121,7 +247,16 @@
     "density": 0,
     "glow": true,
     "lightRadius": 20,
-    "lightIntensity": 1.5
+    "lightIntensity": 1.5,
+    "baseTemperature": 60.0,
+    "conductivity": 0.05,
+    "specificHeat": 1.0,
+    "opacity": 0.85,
+    "specularPower": 0.0,
+    "transmissionTint": [1.0, 1.0, 0.95, 1.0],
+    "baseHeight": 1.0,
+    "colorVariation": 0.02,
+    "animType": "None"
   },
   "Amethyst":
   {
@@ -129,7 +264,16 @@
     "type": "Granular",
     "color": [0.6, 0.2, 0.8, 1.0],
     "density": 14,
-    "gemstone": true
+    "gemstone": true,
+    "baseTemperature": 20.0,
+    "conductivity": 0.7,
+    "specificHeat": 0.7,
+    "opacity": 0.2,
+    "specularPower": 64.0,
+    "transmissionTint": [0.6, 0.2, 0.8, 1.0],
+    "baseHeight": 0.85,
+    "colorVariation": 0.08,
+    "animType": "None"
   },
   "Emerald":
   {
@@ -137,7 +281,16 @@
     "type": "Granular",
     "color": [0.1, 0.75, 0.3, 1.0],
     "density": 14,
-    "gemstone": true
+    "gemstone": true,
+    "baseTemperature": 20.0,
+    "conductivity": 0.7,
+    "specificHeat": 0.7,
+    "opacity": 0.2,
+    "specularPower": 64.0,
+    "transmissionTint": [0.1, 0.75, 0.3, 1.0],
+    "baseHeight": 0.85,
+    "colorVariation": 0.08,
+    "animType": "None"
   },
   "Ruby":
   {
@@ -145,7 +298,16 @@
     "type": "Granular",
     "color": [0.85, 0.05, 0.15, 1.0],
     "density": 14,
-    "gemstone": true
+    "gemstone": true,
+    "baseTemperature": 20.0,
+    "conductivity": 0.7,
+    "specificHeat": 0.7,
+    "opacity": 0.2,
+    "specularPower": 64.0,
+    "transmissionTint": [0.85, 0.05, 0.15, 1.0],
+    "baseHeight": 0.85,
+    "colorVariation": 0.08,
+    "animType": "None"
   },
   "Sapphire":
   {
@@ -153,7 +315,16 @@
     "type": "Granular",
     "color": [0.1, 0.2, 0.85, 1.0],
     "density": 14,
-    "gemstone": true
+    "gemstone": true,
+    "baseTemperature": 20.0,
+    "conductivity": 0.7,
+    "specificHeat": 0.7,
+    "opacity": 0.2,
+    "specularPower": 64.0,
+    "transmissionTint": [0.1, 0.2, 0.85, 1.0],
+    "baseHeight": 0.85,
+    "colorVariation": 0.08,
+    "animType": "None"
   },
   "Topaz":
   {
@@ -161,70 +332,113 @@
     "type": "Granular",
     "color": [0.95, 0.7, 0.1, 1.0],
     "density": 14,
-    "gemstone": true
+    "gemstone": true,
+    "baseTemperature": 20.0,
+    "conductivity": 0.7,
+    "specificHeat": 0.7,
+    "opacity": 0.2,
+    "specularPower": 64.0,
+    "transmissionTint": [0.95, 0.7, 0.1, 1.0],
+    "baseHeight": 0.85,
+    "colorVariation": 0.08,
+    "animType": "None"
   },
   "Bomb": {
     "id": 20,
     "type": "Granular",
-    "color": [
-      0.2,
-      0.2,
-      0.2,
-      1
-    ],
+    "color": [0.2, 0.2, 0.2, 1.0],
     "density": 15,
     "singleClick": true,
-    "life": 0
+    "life": 0,
+    "baseTemperature": 20.0,
+    "conductivity": 0.5,
+    "specificHeat": 1.0,
+    "opacity": 0.85,
+    "specularPower": 2.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 0.8,
+    "colorVariation": 0.05,
+    "animType": "None"
   },
   "Wind": {
     "id": 21,
     "type": "Static",
-    "color": [
-      0.7,
-      0.85,
-      1,
-      0.3
-    ],
-    "density": 0
+    "color": [0.7, 0.85, 1.0, 0.3],
+    "density": 0,
+    "baseTemperature": 20.0,
+    "conductivity": 0.02,
+    "specificHeat": 1.0,
+    "opacity": 0.02,
+    "specularPower": 0.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 0.0,
+    "colorVariation": 0.05,
+    "animType": "None"
   },
   "Void": {
     "id": 22,
     "type": "Static",
-    "color": [
-      0.02,
-      0,
-      0.05,
-      1
-    ],
-    "density": 999
+    "color": [0.02, 0.0, 0.05, 1.0],
+    "density": 999,
+    "baseTemperature": -40.0,
+    "conductivity": 0.0,
+    "specificHeat": 99.0,
+    "opacity": 0.95,
+    "specularPower": 8.0,
+    "transmissionTint": [0.1, 0.0, 0.15, 1.0],
+    "baseHeight": -0.5,
+    "colorVariation": 0.03,
+    "animType": "Void"
   },
   "BlackHole": {
     "id": 23,
     "type": "Static",
-    "color": [
-      0,
-      0,
-      0,
-      1
-    ],
+    "color": [0.0, 0.0, 0.0, 1.0],
     "density": 999,
     "singleClick": true,
     "glow": true,
     "lightRadius": 12,
-    "lightIntensity": 0.3
+    "lightIntensity": 0.3,
+    "baseTemperature": 20.0,
+    "conductivity": 0.0,
+    "specificHeat": 99.0,
+    "opacity": 1.0,
+    "specularPower": 32.0,
+    "transmissionTint": [0.0, 0.0, 0.0, 1.0],
+    "baseHeight": -1.0,
+    "colorVariation": 0.0,
+    "animType": "BlackHole"
   },
   "WoodTip": {
     "id": 24,
     "color": [0.45, 0.28, 0.15, 1.0],
     "type": "Static",
     "density": 10.0,
-    "singleClick": false
+    "singleClick": false,
+    "baseTemperature": 20.0,
+    "conductivity": 0.15,
+    "specificHeat": 1.7,
+    "opacity": 0.85,
+    "specularPower": 1.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 1.0,
+    "colorVariation": 0.1,
+    "animType": "None"
   },
   "LeafTip": {
     "id": 25,
     "color": [0.2, 0.65, 0.15, 1.0],
     "type": "Static",
     "density": 10.0,
-    "singleClick": false
+    "singleClick": false,
+    "baseTemperature": 20.0,
+    "conductivity": 0.1,
+    "specificHeat": 1.5,
+    "opacity": 0.85,
+    "specularPower": 1.0,
+    "transmissionTint": [1.0, 1.0, 1.0, 1.0],
+    "baseHeight": 1.0,
+    "colorVariation": 0.12,
+    "animType": "None"
   }
 }

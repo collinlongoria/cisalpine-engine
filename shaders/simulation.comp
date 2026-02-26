@@ -6,20 +6,32 @@ layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8ui, binding = 1) uniform writeonly uimage2D stateOut;
 layout(rgba16f, binding = 3) uniform readonly image2D forceField;
 
+// Phase 2: Temperature texture (read-only)
+layout(r16f, binding = 4) uniform readonly image2D temperatureIn;
+
 struct ElementData {
-    vec4 color;
-    int type;
-    float density;
-    float viscosity;
-    float probability;
-    int flammability;
-    int glow;
-    int maxLife;
-    int gemstone;
-    float lightRadius;
-    float lightIntensity;
-    float ior;
-    int _pad;
+    vec4 color;                // 0-15
+    int type;                  // 16-19
+    float density;             // 20-23
+    float viscosity;           // 24-27
+    float probability;         // 28-31
+    int flammability;          // 32-35
+    int glow;                  // 36-39
+    int maxLife;               // 40-43
+    int gemstone;              // 44-47
+    float lightRadius;         // 48-51
+    float lightIntensity;      // 52-55
+    float ior;                 // 56-59
+    float baseTemperature;     // 60-63
+    float conductivity;        // 64-67
+    float specificHeat;        // 68-71
+    float opacity;             // 72-75
+    float specularPower;       // 76-79
+    vec4 transmissionTint;     // 80-95
+    float baseHeight;          // 96-99
+    float colorVariation;      // 100-103
+    int animType;              // 104-107
+    int _pad;                  // 108-111
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
@@ -41,6 +53,20 @@ layout(std430, binding = 6) buffer ActiveChunkList {
     uint active_chunk_ids[];
 };
 
+// Phase 1: Effector List SSBO for writing effectors
+struct Effector {
+    vec2 position;       // 8 bytes
+    uint type;           // 4 bytes (0 = Black Hole, 1 = Bomb)
+    float strength;      // 4 bytes
+};
+
+layout(std430, binding = 8) buffer EffectorList {
+    uint effectorCount;
+    uint _eff_pad1;
+    uint _eff_pad2;
+    uint _eff_pad3;
+    Effector effectors[];
+};
 uniform vec2  worldSize;
 uniform float time;
 uniform uint  frameCount;
@@ -55,6 +81,17 @@ const uint BOMB_FUSE_TICKS  = 250u;
 const float BOMB_DESTROY_RADIUS = 12.0;
 
 const int CHUNK_WAKE_MARGIN = 2;
+
+
+// Phase 1: Write an effector to the SSBO
+void emitEffector(vec2 position, uint type, float strength) {
+    uint slot = atomicAdd(effectorCount, 1u);
+    if (slot < uint(MAX_EFFECTORS)) {
+        effectors[slot].position = position;
+        effectors[slot].type = type;
+        effectors[slot].strength = strength;
+    }
+}
 
 void wakeChunk(ivec2 pixelPos) {
     if (!useChunkSleep) return;
@@ -152,6 +189,12 @@ uint getLife(ivec2 pos) { return getState(pos).g; }
 vec2 getForce(ivec2 pos) {
     if (!inBounds(pos)) return vec2(0.0);
     return imageLoad(forceField, pos).rg;
+}
+
+// Phase 2: Read temperature at a position
+float getTemperature(ivec2 pos) {
+    if (!inBounds(pos)) return 20.0; // room temperature
+    return imageLoad(temperatureIn, pos).r;
 }
 
 bool isDoomed(ivec2 pos) {
@@ -599,6 +642,11 @@ void main() {
         return;
     }
 
+    // Phase 1: BLACK HOLE emits effector for scatter-based physics
+    if (elem == BLACKHOLE) {
+        emitEffector(vec2(pos), 0u, 8.0); // type 0 = Black Hole
+    }
+
     // VOID: Destroy anything touching it
     if (elem != VOID && elem != BLACKHOLE && elem != EMPTY) {
         for (int dy = -1; dy <= 1; dy++) {
@@ -636,6 +684,9 @@ void main() {
 
         // If this is the detonation frame (B=255), turn into fire + smoke
         if (flags == 255u) {
+            // Phase 1: Emit bomb effector for scatter-based physics
+            emitEffector(vec2(pos), 1u, 15.0); // type 1 = Bomb
+
             // Bomb center becomes fire
             imageStore(stateOut, pos, uvec4(FIRE, 255u, 0u, 0u));
             wakeChunkAndNeighbors(pos);
@@ -703,9 +754,37 @@ void main() {
         }
     }
 
+    // === Phase 2: THERMODYNAMIC PHASE CHANGES ===
+    // Read temperature at this pixel and apply phase transitions
+    if (elem != EMPTY && elem < MAX_ELEMENTS) {
+        float temp = getTemperature(pos);
+
+        // Water boils to Smoke at T > 100
+        if (elem == WATER && temp > 100.0) {
+            float boilChance = clamp((temp - 100.0) / 50.0, 0.0, 0.8);
+            float roll = float(hash3u(uvec2(pos), frameCount * 13u + 7u) & 0xFFFFu) / 65535.0;
+            if (roll < boilChance) {
+                imageStore(stateOut, pos, uvec4(SMOKE, 200u, 0, 0));
+                wakeChunkAndNeighbors(pos);
+                return;
+            }
+        }
+
+        // Lava cools to Obsidian when cold enough (T < 200)
+        if (elem == LAVA && temp < 200.0) {
+            float coolChance = clamp((200.0 - temp) / 100.0, 0.0, 0.3);
+            float roll = float(hash3u(uvec2(pos), frameCount * 17u + 11u) & 0xFFFFu) / 65535.0;
+            if (roll < coolChance) {
+                imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0, 0));
+                wakeChunkAndNeighbors(pos);
+                return;
+            }
+        }
+    }
+
     // REACTION LOGIC
 
-    // Water + Lava interaction
+    // Water + Lava interaction (kept for direct contact, supplements thermal system)
     if (elem == WATER) {
         ivec2 lavaPos = ivec2(-1);
         for (int dy = -1; dy <= 1; dy++) {
@@ -767,7 +846,6 @@ void main() {
             }
         }
     }
-
     // SMOKE DECAY
     if (elem == SMOKE) {
         if (life == 0u) {

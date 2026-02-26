@@ -1,0 +1,106 @@
+#version 460 core
+
+layout(local_size_x = 16, local_size_y = 16) in;
+
+layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
+
+layout(r16f, binding = 4) uniform readonly  image2D tempIn;
+layout(r16f, binding = 5) uniform writeonly image2D tempOut;
+
+struct ElementData {
+    vec4 color;
+    int type;
+    float density;
+    float viscosity;
+    float probability;
+    int flammability;
+    int glow;
+    int maxLife;
+    int gemstone;
+    float lightRadius;
+    float lightIntensity;
+    float ior;
+    float baseTemperature;
+    float conductivity;
+    float specificHeat;
+    float opacity;
+    float specularPower;
+    vec4 transmissionTint;
+    float baseHeight;
+    float colorVariation;
+    int animType;
+    int _pad;
+};
+
+layout(std430, binding = 2) buffer ElementRegistry {
+    ElementData elements[];
+};
+
+uniform vec2  worldSize;
+uniform float time;
+
+bool inBounds(ivec2 p) {
+    return (p.x >= 0 && p.x < int(worldSize.x) &&
+            p.y >= 0 && p.y < int(worldSize.y));
+}
+
+void main() {
+    ivec2 pos = ivec2(gl_GlobalInvocationID.xy);
+    if (!inBounds(pos)) return;
+
+    uvec4 state = imageLoad(stateIn, pos);
+    uint elem = state.r;
+
+    float currentTemp = imageLoad(tempIn, pos).r;
+
+    if (elem == EMPTY || elem >= MAX_ELEMENTS) {
+        float ambient = 20.0;
+        currentTemp = mix(currentTemp, ambient, 0.05);
+        imageStore(tempOut, pos, vec4(currentTemp, 0.0, 0.0, 0.0));
+        return;
+    }
+
+    float myConductivity = elements[elem].conductivity;
+    float mySpecificHeat = elements[elem].specificHeat;
+    float myBaseTemp = elements[elem].baseTemperature;
+
+    if (myBaseTemp > currentTemp + 10.0) {
+        float injection = (myBaseTemp - currentTemp) * 0.05;
+        currentTemp += injection;
+    }
+
+    float netHeatTransfer = 0.0;
+
+    for (int dy = -1; dy <= 1; dy++) {
+        for (int dx = -1; dx <= 1; dx++) {
+            if (dx == 0 && dy == 0) continue;
+
+            ivec2 np = pos + ivec2(dx, dy);
+            if (!inBounds(np)) continue;
+
+            uvec4 nState = imageLoad(stateIn, np);
+            uint nElem = nState.r;
+
+            float neighborTemp = imageLoad(tempIn, np).r;
+
+            float nConductivity = 0.01; // air conductivity for empty
+            if (nElem != EMPTY && nElem < MAX_ELEMENTS) {
+                nConductivity = elements[nElem].conductivity;
+            }
+
+            float effectiveConductivity = 2.0 * myConductivity * nConductivity / max(myConductivity + nConductivity, 0.001);
+
+            float weight = (abs(dx) + abs(dy) == 1) ? 1.0 : 0.707;
+
+            float deltaT = neighborTemp - currentTemp;
+            netHeatTransfer += deltaT * effectiveConductivity * weight;
+        }
+    }
+
+    float dt = 0.1; // diffusion time step
+    currentTemp += netHeatTransfer * dt / max(mySpecificHeat, 0.1);
+
+    currentTemp = clamp(currentTemp, -50.0, 2000.0);
+
+    imageStore(tempOut, pos, vec4(currentTemp, 0.0, 0.0, 0.0));
+}

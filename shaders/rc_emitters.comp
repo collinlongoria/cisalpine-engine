@@ -6,19 +6,28 @@ layout(rgba8ui, binding = 0) uniform readonly  uimage2D stateIn;
 layout(rgba16f, binding = 1) uniform writeonly image2D  radianceField;
 
 struct ElementData {
-    vec4 color;
-    int type;
-    float density;
-    float viscosity;
-    float probability;
-    int flammability;
-    int glow;
-    int maxLife;
-    int gemstone;
-    float lightRadius;
-    float lightIntensity;
-    float ior;
-    int _pad;
+    vec4 color;                // 0-15
+    int type;                  // 16-19
+    float density;             // 20-23
+    float viscosity;           // 24-27
+    float probability;         // 28-31
+    int flammability;          // 32-35
+    int glow;                  // 36-39
+    int maxLife;               // 40-43
+    int gemstone;              // 44-47
+    float lightRadius;         // 48-51
+    float lightIntensity;      // 52-55
+    float ior;                 // 56-59
+    float baseTemperature;     // 60-63
+    float conductivity;        // 64-67
+    float specificHeat;        // 68-71
+    float opacity;             // 72-75
+    float specularPower;       // 76-79
+    vec4 transmissionTint;     // 80-95
+    float baseHeight;          // 96-99
+    float colorVariation;      // 100-103
+    int animType;              // 104-107
+    int _pad;                  // 108-111
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
@@ -31,21 +40,18 @@ uniform float glowIntensity;
 uniform bool  skyEnabled;
 uniform float timeOfDay;
 
+// Animation type constants
+const int ANIM_NONE      = 0;
+const int ANIM_LIQUID    = 1;
+const int ANIM_FIRE      = 2;
+const int ANIM_VOID      = 3;
+const int ANIM_BLACKHOLE = 4;
+
 float hashNoise(ivec2 pos) {
     return fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-float getOpacity(uint elem) {
-    if (elem == EMPTY || elem >= MAX_ELEMENTS) return 0.0;
-    if (elem == BLACKHOLE) return 1.0;
-    if (elem == VOID) return 0.95;
-
-    int type = elements[elem].type;
-    if (type == 3) return 0.05; // Gas
-    if (type == 2) return 0.15; // Liquid
-    if (elements[elem].gemstone == 1) return 0.2;
-    return 0.85; // Static / Granular
-}
+// Phase 3: getOpacity is REMOVED. Opacity is read directly from the element buffer.
 
 void main() {
     ivec2 pos  = ivec2(gl_GlobalInvocationID.xy);
@@ -59,6 +65,7 @@ void main() {
 
     if (glowEnabled && elem != EMPTY && elem < MAX_ELEMENTS) {
         float variation = hashNoise(pos);
+        int anim = elements[elem].animType;
 
         // Light element
         if (elem == LIGHT) {
@@ -66,19 +73,19 @@ void main() {
             if (intensity <= 0.0) intensity = 1.5;
             emission = vec3(1.0, 0.98, 0.9) * intensity;
         }
-        // Fire
-        else if (elem == FIRE) {
+        // Phase 3: Fire via animType
+        else if (anim == ANIM_FIRE) {
             float flicker = sin(time * 8.0 + variation * 10.0) * 0.3 + 0.7;
             float lifeFactor = float(state.g) / 255.0;
             emission = vec3(1.0, 0.5, 0.15) * flicker * lifeFactor * glowIntensity * 1.2;
         }
-        // Lava
+        // Lava (hot elements glow based on baseTemperature)
         else if (elem == LAVA) {
             float pulse = sin(time * 3.0 + variation * 6.28) * 0.15 + 0.85;
             emission = vec3(1.0, 0.4, 0.1) * pulse * glowIntensity * 0.8;
         }
-        // Black Hole
-        else if (elem == BLACKHOLE) {
+        // Phase 3: Black Hole via animType
+        else if (anim == ANIM_BLACKHOLE) {
             float ring = sin(time * 4.0 + variation * 6.28) * 0.5 + 0.5;
             vec3 accColor = mix(vec3(0.3, 0.05, 0.5), vec3(0.6, 0.2, 0.05), ring);
             float intensity = elements[elem].lightIntensity;
@@ -92,13 +99,17 @@ void main() {
                 emission = vec3(1.0, 0.2, 0.0) * fuseProgress * glowIntensity * 0.8;
             }
         }
-        // Generic
+        // Generic glow
         else if (elements[elem].glow == 1) {
             emission = elements[elem].color.rgb * glowIntensity * 0.6;
         }
     }
 
-    float opacity = getOpacity(elem);
+    // Phase 3: Read opacity directly from element buffer (replaces getOpacity function)
+    float opacity = 0.0;
+    if (elem != EMPTY && elem < MAX_ELEMENTS) {
+        opacity = elements[elem].opacity;
+    }
 
     imageStore(radianceField, pos, vec4(emission, opacity));
 }
