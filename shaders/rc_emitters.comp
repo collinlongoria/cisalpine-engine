@@ -35,17 +35,16 @@ float hashNoise(ivec2 pos) {
     return fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-// Returns opacity for a given element: 0 = transparent, 1 = fully opaque
 float getOpacity(uint elem) {
     if (elem == EMPTY || elem >= MAX_ELEMENTS) return 0.0;
     if (elem == BLACKHOLE) return 1.0;
     if (elem == VOID) return 0.95;
 
     int type = elements[elem].type;
-    if (type == 3) return 0.05;  // Gas
-    if (type == 2) return 0.15;  // Liquid
+    if (type == 3) return 0.05; // Gas
+    if (type == 2) return 0.15; // Liquid
     if (elements[elem].gemstone == 1) return 0.2;
-    return 0.85;                  // Static / Granular
+    return 0.85; // Static / Granular
 }
 
 void main() {
@@ -56,7 +55,6 @@ void main() {
     uvec4 state = imageLoad(stateIn, pos);
     uint  elem  = state.r;
 
-    // === Compute emission ===
     vec3 emission = vec3(0.0);
 
     if (glowEnabled && elem != EMPTY && elem < MAX_ELEMENTS) {
@@ -79,7 +77,7 @@ void main() {
             float pulse = sin(time * 3.0 + variation * 6.28) * 0.15 + 0.85;
             emission = vec3(1.0, 0.4, 0.1) * pulse * glowIntensity * 0.8;
         }
-        // BlackHole accretion
+        // Black Hole
         else if (elem == BLACKHOLE) {
             float ring = sin(time * 4.0 + variation * 6.28) * 0.5 + 0.5;
             vec3 accColor = mix(vec3(0.3, 0.05, 0.5), vec3(0.6, 0.2, 0.05), ring);
@@ -87,25 +85,20 @@ void main() {
             if (intensity <= 0.0) intensity = 0.3;
             emission = accColor * intensity;
         }
-        // Bomb warning glow
+        // Bomb
         else if (elem == BOMB) {
             float fuseProgress = float(state.g) / 250.0;
             if (fuseProgress > 0.5) {
                 emission = vec3(1.0, 0.2, 0.0) * fuseProgress * glowIntensity * 0.8;
             }
         }
-        // Generic glow elements
+        // Generic
         else if (elements[elem].glow == 1) {
             emission = elements[elem].color.rgb * glowIntensity * 0.6;
         }
     }
 
-    // === Compute opacity ===
     float opacity = getOpacity(elem);
 
-    // Pack: RGB = emission, A = opacity
-    // NOTE: Emission and opacity are stored INDEPENDENTLY.
-    // The cascade shader applies emission weighted by visibility during ray marching,
-    // and uses opacity to attenuate visibility. They should NOT be multiplied together here.
     imageStore(radianceField, pos, vec4(emission, opacity));
 }

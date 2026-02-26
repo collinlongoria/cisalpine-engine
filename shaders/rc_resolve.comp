@@ -48,7 +48,7 @@ void main() {
     int probeX = clamp(pos.x, 0, pcx - 1);
     int probeY = clamp(pos.y, 0, pcy - 1);
 
-    // Integrate all angular rays with a 3x3 spatial blur to reduce artifacts
+    // Integrate all angular rays
     int numRays = BASE_RAYS;
     vec3 sumLight = vec3(0.0);
     float weightSum = 0.0;
@@ -63,23 +63,17 @@ void main() {
                 probeLight += readCascade0(px, py, r).rgb;
             }
 
-            // Gaussian-like weights: 4 (center), 2 (edges), 1 (corners)
             float w = (dx == 0 && dy == 0) ? 4.0 : (abs(dx) + abs(dy) == 1 ? 2.0 : 1.0);
             sumLight += probeLight * w;
             weightSum += w;
         }
     }
 
-    // Average the spatial blur
     vec3 totalLight = sumLight / weightSum;
 
     // Convert from radiance sum to irradiance:
-    // For 2D (flatland): irradiance = (2*PI / numRays) * sum(radiance)
-    // This is the Monte Carlo estimate of the integral over directions
     totalLight *= (2.0 * 3.14159265) / float(numRays);
 
-    // The cascade ray marching already accumulates proper radiance values,
-    // so we just need a mild exposure control here
     totalLight *= 0.15;
 
     imageStore(lightmapOut, pos, vec4(totalLight, 1.0));

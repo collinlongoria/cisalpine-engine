@@ -27,7 +27,7 @@ namespace cisalpine {
 static constexpr int CHUNK_SIZE = 32;  // Each chunk is 32x32 pixels
 
 // Radiance Cascade constants
-static constexpr int RC_BASE_RAYS    = 8;   // Angular rays at cascade level 0
+static constexpr int RC_BASE_RAYS    = 4;   // Angular rays at cascade level 0
 static constexpr int RC_MAX_CASCADES = 8;   // Maximum cascade levels
 
 // Simulation settings

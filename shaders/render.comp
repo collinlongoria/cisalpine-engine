@@ -160,7 +160,6 @@ vec3 skyColor(float normalizedY, float tod, ivec2 pos, ivec2 size) {
             sunColor = vec3(1.0, 0.98, 0.9);
         }
 
-        // 1. Draw the glow first (applied to all pixels within glowRadius)
         if (distToSun < glowRadius) {
             // Start the glow falloff from the center (0.0) out to glowRadius
             float glow = 1.0 - smoothstep(0.0, glowRadius, distToSun);
@@ -169,7 +168,6 @@ vec3 skyColor(float normalizedY, float tod, ivec2 pos, ivec2 size) {
             sky += sunColor * glow * glowStrength;
         }
 
-        // 2. Draw the solid sun disc on top
         if (distToSun < sunRadius) {
             // Fixed smoothstep: lower bound first, upper bound second.
             // This fades from 1.0 (opaque center) to 0.0 (transparent edge).
