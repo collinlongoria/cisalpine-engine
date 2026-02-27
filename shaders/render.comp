@@ -366,6 +366,38 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
         return vec4(smokeColor, alpha);
     }
 
+    // STEAM - translucent white wisps
+    if (element == STEAM) {
+        float wisp = sin(time * 3.0 + float(pos.x) * 0.4 + float(pos.y) * 0.3) * 0.1;
+        vec3 steamColor = vec3(0.85, 0.90, 0.95) + wisp;
+        steamColor += (variation - 0.5) * 0.06;
+        float alpha = 0.2 + sin(time * 2.0 + variation * 6.28) * 0.08;
+        return vec4(clamp(steamColor, 0.0, 1.0), alpha);
+    }
+
+    // CLOUD - puffy white/gray
+    if (element == CLOUD) {
+        float lifeFactor = float(life) / 255.0;
+        float puff = sin(time * 0.5 + float(pos.x) * 0.2) * 0.03;
+        float puff2 = cos(time * 0.3 + float(pos.y) * 0.15) * 0.02;
+        vec3 cloudColor = vec3(0.88 + puff, 0.90 + puff2, 0.94);
+        cloudColor += (variation - 0.5) * 0.05;
+        // Darken slightly as life decreases (rain clouds)
+        cloudColor *= 0.7 + lifeFactor * 0.3;
+        float alpha = 0.5 + lifeFactor * 0.3;
+        return vec4(clamp(cloudColor, 0.0, 1.0), alpha);
+    }
+
+    // ICE - crystalline with subtle shimmer
+    if (element == ICE) {
+        float shimmer = sin(time * 1.5 + float(pos.x) * 0.6 + float(pos.y) * 0.4) * 0.05;
+        vec3 iceColor = vec3(0.70 + shimmer, 0.85 + shimmer * 0.5, 0.95);
+        iceColor += (variation - 0.5) * 0.06;
+        float sparkle = pow(max(sin(time * 4.0 + variation * 15.0), 0.0), 12.0) * 0.15;
+        iceColor += sparkle;
+        return vec4(clamp(iceColor, 0.0, 1.0), 0.9);
+    }
+
     // Grass
     if (element == GRASS) {
         float lifeFactor = float(life) / 255.0;

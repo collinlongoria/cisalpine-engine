@@ -319,7 +319,12 @@ ivec2 forceBasedDest(ivec2 src, uint elem, vec2 force) {
 
         if (forceMag > threshold * 2.0 && targetElem != VOID && targetElem != BLACKHOLE) {
             if (targetElem != elem) {
-                return primary;
+                // Only force-push into fluids/gases or lighter elements
+                bool targetIsFluid = isLiquid(targetElem) || isGas(targetElem);
+                bool densityAdv = (elements[elem].density > elements[targetElem].density);
+                if (targetIsFluid || densityAdv) {
+                    return primary;
+                }
             }
         }
         if (canDisplace(elem, targetElem)) return primary;
@@ -452,10 +457,14 @@ bool sourceProposesTo(ivec2 src, ivec2 dest) {
     uint destElem = getElement(dest);
     if (canDisplace(e, destElem)) return true;
 
-    // Force override: strong force can push into occupied cells
+    // Force override: strong force can push into occupied cells (with density check)
     if (destElem != VOID && destElem != BLACKHOLE && destElem != e) {
         vec2 force = getForce(src);
-        if (length(force) > 5.0) return true;
+        if (length(force) > 5.0) {
+            bool targetIsFluid = isLiquid(destElem) || isGas(destElem) || isEmpty(destElem);
+            bool densityAdvantage = (elements[e].density > elements[destElem].density);
+            if (targetIsFluid || densityAdvantage) return true;
+        }
     }
 
     return false;
@@ -759,15 +768,106 @@ void main() {
     if (elem != EMPTY && elem < MAX_ELEMENTS) {
         float temp = getTemperature(pos);
 
-        // Water boils to Smoke at T > 100
+        // Water freezes to Ice at T < 0
+        if (elem == WATER && temp < 0.0) {
+            float freezeChance = clamp((0.0 - temp) / 20.0, 0.0, 0.6);
+            float roll = float(hash3u(uvec2(pos), frameCount * 19u + 3u) & 0xFFFFu) / 65535.0;
+            if (roll < freezeChance) {
+                imageStore(stateOut, pos, uvec4(ICE, 0u, 0, 0));
+                wakeChunkAndNeighbors(pos);
+                return;
+            }
+        }
+
+        // Water boils to Steam at T > 100
         if (elem == WATER && temp > 100.0) {
             float boilChance = clamp((temp - 100.0) / 50.0, 0.0, 0.8);
             float roll = float(hash3u(uvec2(pos), frameCount * 13u + 7u) & 0xFFFFu) / 65535.0;
             if (roll < boilChance) {
-                imageStore(stateOut, pos, uvec4(SMOKE, 200u, 0, 0));
+                imageStore(stateOut, pos, uvec4(STEAM, 0u, 0, 0));
                 wakeChunkAndNeighbors(pos);
                 return;
             }
+        }
+
+        // Ice melts to Water at T > 5
+        if (elem == ICE && temp > 5.0) {
+            float meltChance = clamp((temp - 5.0) / 30.0, 0.0, 0.5);
+            float roll = float(hash3u(uvec2(pos), frameCount * 23u + 5u) & 0xFFFFu) / 65535.0;
+            if (roll < meltChance) {
+                imageStore(stateOut, pos, uvec4(WATER, 0u, 0, 0));
+                wakeChunkAndNeighbors(pos);
+                return;
+            }
+        }
+
+        // Steam condenses to Water when cooled below 80
+        if (elem == STEAM && temp < 80.0) {
+            float condenseChance = clamp((80.0 - temp) / 40.0, 0.0, 0.3);
+            float roll = float(hash3u(uvec2(pos), frameCount * 29u + 13u) & 0xFFFFu) / 65535.0;
+            if (roll < condenseChance) {
+                imageStore(stateOut, pos, uvec4(WATER, 0u, 0, 0));
+                wakeChunkAndNeighbors(pos);
+                return;
+            }
+        }
+
+        // Steam accumulation -> Cloud: if enough steam neighbors, become cloud
+        if (elem == STEAM) {
+            int steamCount = 0;
+            for (int dy = -2; dy <= 2; dy++) {
+                for (int dx = -2; dx <= 2; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    ivec2 np = pos + ivec2(dx, dy);
+                    if (inBounds(np)) {
+                        uint ne = getElement(np);
+                        if (ne == STEAM || ne == CLOUD) steamCount++;
+                    }
+                }
+            }
+            // Need at least 6 nearby steam/cloud to form a cloud
+            if (steamCount >= 6) {
+                float cloudChance = 0.08;
+                float roll = float(hash3u(uvec2(pos), frameCount * 31u + 17u) & 0xFFFFu) / 65535.0;
+                if (roll < cloudChance) {
+                    imageStore(stateOut, pos, uvec4(CLOUD, 255u, 0, 0));
+                    wakeChunkAndNeighbors(pos);
+                    return;
+                }
+            }
+            // Steam stays awake so it can keep moving up
+            wakeChunkAndNeighbors(pos);
+        }
+
+        // Cloud behavior: slowly rain (produce water below) and decay
+        if (elem == CLOUD) {
+            // Rain: chance to spawn water below
+            ivec2 below = pos + ivec2(0, -1);
+            if (inBounds(below) && getElement(below) == EMPTY) {
+                float rainChance = 0.008;
+                float roll = float(hash3u(uvec2(pos), frameCount * 37u + 23u) & 0xFFFFu) / 65535.0;
+                if (roll < rainChance && life > 10u) {
+                    // Reduce cloud life when it rains
+                    cur.g = life - 5u;
+                    // The water will be spawned by the empty cell's movement logic
+                    // Instead, we directly create water below on the next step
+                    // For now, just note: cloud decays via life
+                }
+            }
+
+            // Slow life decay for clouds
+            uint cloudDecay = 1u;
+            uint randDecay = hash3u(uvec2(pos), frameCount * 41u) % 3u;
+            // Only decay sometimes
+            if (randDecay == 0u) {
+                if (life <= cloudDecay) {
+                    imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                    wakeChunkAndNeighbors(pos);
+                    return;
+                }
+                cur.g = life - cloudDecay;
+            }
+            wakeChunkAndNeighbors(pos);
         }
 
         // Lava cools to Obsidian when cold enough (T < 200)
@@ -1022,6 +1122,20 @@ void main() {
 
     // EMPTY CELL
     if (elem == EMPTY) {
+        // Cloud rain: check if there's a cloud above that wants to rain
+        ivec2 above = pos + ivec2(0, 1);
+        if (inBounds(above)) {
+            uvec4 aboveState = getState(above);
+            if (aboveState.r == CLOUD && aboveState.g > 15u) {
+                float rainRoll = float(hash3u(uvec2(pos), frameCount * 43u + 29u) & 0xFFFFu) / 65535.0;
+                if (rainRoll < 0.006) {
+                    imageStore(stateOut, pos, uvec4(WATER, 0u, 0u, 0u));
+                    wakeChunkAndNeighbors(pos);
+                    return;
+                }
+            }
+        }
+
         uvec4 newState;
 
         if (tryPullWoodTip(pos, newState)) {
@@ -1052,12 +1166,19 @@ void main() {
             uint destElem = getElement(dest);
             // Check if we can actually go there
             bool canGo = canDisplace(elem, destElem);
-            // Force can push into occupied cells too
+            // Force can push into occupied cells too, but only if target is
+            // a fluid/gas or lower density — prevents Y-column crush bug
             if (!canGo && destElem != VOID && destElem != BLACKHOLE) {
                 vec2 force = getForce(pos);
                 float forceMag = length(force);
                 if (forceMag > 5.0 && destElem != elem) {
-                    canGo = true; // Force override
+                    // Only allow force override against non-static, non-granular
+                    // OR if target density is less than ours
+                    bool targetIsFluid = isLiquid(destElem) || isGas(destElem) || isEmpty(destElem);
+                    bool densityAdvantage = (elements[elem].density > elements[destElem].density);
+                    if (targetIsFluid || densityAdvantage) {
+                        canGo = true; // Force override
+                    }
                 }
             }
             if (canGo) {

@@ -50,6 +50,11 @@ struct SimulationSettings {
 
     // Chunk sleep system
     bool chunkSleepEnabled = true;
+
+    // Ambient temperature (changes with time of day)
+    float ambientTemperature = 20.0f;
+    float ambientTempOverride = 20.0f;  // Manual override from slider
+    bool useAutoAmbientTemp = true;     // Derive from time of day
 };
 
 struct RenderSettings {

@@ -35,6 +35,7 @@ void Registry::load(const std::string &filename) {
     gpuData.resize(maxId + 1);
     names.resize(maxId + 1);
     singleClickFlags.resize(maxId + 1, false);
+    hiddenFlags.resize(maxId + 1, false);
 
     // Initialize all elements with defaults
     for (auto& d : gpuData) {
@@ -154,6 +155,7 @@ void Registry::load(const std::string &filename) {
 
         // CPU-only properties
         singleClickFlags[id] = val.value("singleClick", false);
+        hiddenFlags[id] = val.value("hidden", false);
     }
 
     // Upload to GPU
@@ -221,6 +223,27 @@ bool Registry::isSingleClick(int id) const {
         return singleClickFlags[id];
     }
     return false;
+}
+
+bool Registry::isHidden(int id) const {
+    if (id >= 0 && id < static_cast<int>(hiddenFlags.size())) {
+        return hiddenFlags[id];
+    }
+    return false;
+}
+
+int Registry::getMaxLife(int id) const {
+    if (id >= 0 && id < static_cast<int>(gpuData.size())) {
+        return gpuData[id].maxLife;
+    }
+    return 0;
+}
+
+float Registry::getBaseTemperature(int id) const {
+    if (id >= 0 && id < static_cast<int>(gpuData.size())) {
+        return gpuData[id].baseTemperature;
+    }
+    return 20.0f;
 }
 
 }

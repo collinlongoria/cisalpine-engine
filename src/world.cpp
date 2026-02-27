@@ -580,6 +580,7 @@ void World::temperatureStep() {
     temperatureShader.use();
     temperatureShader.setVec2("worldSize", static_cast<float>(worldWidth), static_cast<float>(worldHeight));
     temperatureShader.setFloat("time", simulationTime);
+    temperatureShader.setFloat("ambientTemperature", simSettings.ambientTemperature);
 
     GLuint workGroupsX = (worldWidth + 15) / 16;
     GLuint workGroupsY = (worldHeight + 15) / 16;
@@ -591,15 +592,18 @@ void World::temperatureStep() {
 }
 
 void World::simulationStep() {
-    // Phase 1: Reset effector count to 0 at beginning of each frame
+    // Phase 1: Force update reads effectors from PREVIOUS simulation step
+    gpuTimers[TIMER_FORCE_UPDATE].begin();
+    forceUpdateStep();
+    gpuTimers[TIMER_FORCE_UPDATE].end();
+
+    // Phase 1: NOW reset effector count to 0 AFTER physics has read them,
+    // but BEFORE simulation writes new ones. This fixes the bug where
+    // effectors were being cleared before physics could read them.
     uint32_t zero = 0;
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, effectorSSBO);
     glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(uint32_t), &zero);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
-
-    gpuTimers[TIMER_FORCE_UPDATE].begin();
-    forceUpdateStep();
-    gpuTimers[TIMER_FORCE_UPDATE].end();
 
     // Phase 2: Temperature diffusion runs BEFORE simulation
     gpuTimers[TIMER_TEMPERATURE].begin();

@@ -76,11 +76,21 @@ public:
     // Single-click flag for UI input handling
     bool isSingleClick(int id) const;
 
+    // Hidden flag - elements like WoodTip/LeafTip that shouldn't appear in UI
+    bool isHidden(int id) const;
+
+    // Max life for brush initialization (255 for Fire, 0 for most elements)
+    int getMaxLife(int id) const;
+
+    // Base temperature for brush temperature stamping
+    float getBaseTemperature(int id) const;
+
 private:
     std::vector<GPUElementData> gpuData;
     std::vector<std::string> names;
     std::map<std::string, int> nameToId;
     std::vector<bool> singleClickFlags; // CPU-side only, not on GPU
+    std::vector<bool> hiddenFlags;      // CPU-side only, not on GPU
     GLuint ssbo = 0;
 
     int parseType(const std::string& typeStr);

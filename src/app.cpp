@@ -324,8 +324,25 @@ void App::handleInput(float dt) {
             brushShader.setUint("drawElement", static_cast<uint32_t>(selectedElementId));
             brushShader.setBool("isEraser", erasing);
 
+            // Bug Fix #3: Pass initial life so fire starts with 255, not 0
+            uint32_t initialLife = 0;
+            if (!erasing && selectedElementId < static_cast<int>(registry.getNames().size())) {
+                initialLife = static_cast<uint32_t>(registry.getMaxLife(selectedElementId));
+            }
+            brushShader.setUint("initialLife", initialLife);
+
             // Bind current state texture for read/write
             glBindImageTexture(0, world->getCurrentTexture(), 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8UI);
+
+            // Bug Fix #3: Also bind temperature texture so brush can stamp baseTemperature
+            glBindImageTexture(2, world->getCurrentTemperatureTexture(), 0, GL_FALSE, 0, GL_READ_WRITE, GL_R16F);
+
+            // Pass base temperature for the selected element
+            float baseTemp = 20.0f;
+            if (!erasing && selectedElementId < static_cast<int>(registry.getNames().size())) {
+                baseTemp = registry.getBaseTemperature(selectedElementId);
+            }
+            brushShader.setFloat("baseTemperature", baseTemp);
 
             // Dispatch enough groups to cover brush size
             int groups = (effectiveBrushSize * 2 + 16) / 16;
@@ -384,6 +401,15 @@ void App::renderSettingsWindow() {
     if (simSettings.chunkSleepEnabled) {
         ImGui::Text("Chunks: %d/%d active", world->getActiveChunkCount(), world->getTotalChunks());
         ImGui::Text("Grid: %dx%d", world->getChunkGridWidth(), world->getChunkGridHeight());
+    }
+
+    ImGui::Spacing();
+    ImGui::Text("Temperature");
+    ImGui::Checkbox("Auto from Time of Day", &simSettings.useAutoAmbientTemp);
+    if (!simSettings.useAutoAmbientTemp) {
+        ImGui::SliderFloat("Ambient Temp", &simSettings.ambientTemperature, -40.0f, 60.0f, "%.0f C");
+    } else {
+        ImGui::Text("Ambient: %.0f C (auto)", simSettings.ambientTemperature);
     }
 
     ImGui::Spacing();
@@ -680,8 +706,12 @@ void App::renderUI() {
     const auto& names = registry.getNames();
     float availWidth = ImGui::GetContentRegionAvail().x;
 
+    int visibleIndex = 0;  // Track visible item count for 2-column layout
     for (size_t i = 0; i < names.size(); i++) {
         if (names[i].empty()) continue;
+
+        // Skip hidden elements (like WoodTip, LeafTip)
+        if (registry.isHidden(static_cast<int>(i))) continue;
 
         int id = static_cast<int>(i);
         bool isSelected = (selectedElementId == id);
@@ -749,10 +779,10 @@ void App::renderUI() {
         }
 
         // Two-column: put next button on same line if this was an even-indexed visible item
-        // Use a simple approach: odd IDs go on same line
-        if ((i % 2) == 0 && i + 1 < names.size()) {
+        if ((visibleIndex % 2) == 0) {
             ImGui::SameLine();
         }
+        visibleIndex++;
     }
     ImGui::NewLine();
 
@@ -779,6 +809,7 @@ void App::renderUI() {
     ImGui::Text("Lighting");
     {
         RenderSettings& settings = world->renderSettings();
+        SimulationSettings& simSettings = world->simulationSettings();
 
         // Sky toggle
         ImGui::Checkbox("Sky", &settings.skyEnabled);
@@ -804,9 +835,26 @@ void App::renderUI() {
             dayFactor = fmax(dayFactor, 0.0f);
             settings.ambientLight = 0.05f + dayFactor * 0.7f;
 
+            // Auto-derive ambient temperature from time of day
+            if (simSettings.useAutoAmbientTemp) {
+                // Night: ~5C, Dawn/Dusk: ~12C, Noon: ~30C
+                simSettings.ambientTemperature = 5.0f + dayFactor * 25.0f;
+            }
+
             ImGui::Checkbox("Show Sun", &settings.showSun);
         } else {
             ImGui::SliderFloat("Ambient", &settings.ambientLight, 0.0f, 1.0f);
+        }
+
+        // Ambient Temperature
+        ImGui::Separator();
+        ImGui::Text("Temperature");
+        ImGui::Checkbox("Auto##TempAuto", &simSettings.useAutoAmbientTemp);
+        ImGui::SameLine();
+        if (simSettings.useAutoAmbientTemp) {
+            ImGui::Text("Ambient: %.0f C", simSettings.ambientTemperature);
+        } else {
+            ImGui::SliderFloat("Ambient##Temp", &simSettings.ambientTemperature, -40.0f, 60.0f, "%.0f C");
         }
     }
 
