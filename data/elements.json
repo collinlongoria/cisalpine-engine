@@ -258,9 +258,66 @@
     "colorVariation": 0.02,
     "animType": "None"
   },
-  "Amethyst":
+  "RedLED":
   {
     "id": 15,
+    "type": "Static",
+    "color": [1.0, 0.1, 0.1, 1.0],
+    "density": 0,
+    "glow": true,
+    "lightRadius": 20,
+    "lightIntensity": 1.5,
+    "baseTemperature": 60.0,
+    "conductivity": 0.05,
+    "specificHeat": 1.0,
+    "opacity": 0.85,
+    "specularPower": 0.0,
+    "transmissionTint": [1.0, 0.1, 0.1, 1.0],
+    "baseHeight": 1.0,
+    "colorVariation": 0.02,
+    "animType": "None"
+  },
+  "BlueLED":
+  {
+    "id": 16,
+    "type": "Static",
+    "color": [0.1, 0.1, 1.0, 1.0],
+    "density": 0,
+    "glow": true,
+    "lightRadius": 20,
+    "lightIntensity": 1.5,
+    "baseTemperature": 60.0,
+    "conductivity": 0.05,
+    "specificHeat": 1.0,
+    "opacity": 0.85,
+    "specularPower": 0.0,
+    "transmissionTint": [0.1, 0.1, 1.0, 1.0],
+    "baseHeight": 1.0,
+    "colorVariation": 0.02,
+    "animType": "None"
+  },
+  "GreenLED":
+  {
+    "id": 17,
+    "type": "Static",
+    "color": [0.0, 1.0, 0.0, 1.0],
+    "density": 0,
+    "glow": true,
+    "lightRadius": 20,
+    "lightIntensity": 1.5,
+    "baseTemperature": 60.0,
+    "conductivity": 0.05,
+    "specificHeat": 1.0,
+    "opacity": 0.85,
+    "specularPower": 0.0,
+    "transmissionTint": [0.0, 1.0, 0.0, 1.0],
+    "baseHeight": 1.0,
+    "colorVariation": 0.02,
+    "animType": "None"
+  },
+  "Amethyst":
+  {
+    "id": 18,
     "type": "Granular",
     "color": [0.6, 0.2, 0.8, 1.0],
     "density": 14,
@@ -277,7 +334,7 @@
   },
   "Emerald":
   {
-    "id": 16,
+    "id": 19,
     "type": "Granular",
     "color": [0.1, 0.75, 0.3, 1.0],
     "density": 14,
@@ -294,7 +351,7 @@
   },
   "Ruby":
   {
-    "id": 17,
+    "id": 20,
     "type": "Granular",
     "color": [0.85, 0.05, 0.15, 1.0],
     "density": 14,
@@ -311,7 +368,7 @@
   },
   "Sapphire":
   {
-    "id": 18,
+    "id": 21,
     "type": "Granular",
     "color": [0.1, 0.2, 0.85, 1.0],
     "density": 14,
@@ -328,7 +385,7 @@
   },
   "Topaz":
   {
-    "id": 19,
+    "id": 22,
     "type": "Granular",
     "color": [0.95, 0.7, 0.1, 1.0],
     "density": 14,
@@ -344,7 +401,7 @@
     "animType": "None"
   },
   "Bomb": {
-    "id": 20,
+    "id": 23,
     "type": "Granular",
     "color": [0.2, 0.2, 0.2, 1.0],
     "density": 15,
@@ -361,7 +418,7 @@
     "animType": "None"
   },
   "Wind": {
-    "id": 21,
+    "id": 24,
     "type": "Static",
     "color": [0.7, 0.85, 1.0, 0.3],
     "density": 0,
@@ -376,7 +433,7 @@
     "animType": "None"
   },
   "Void": {
-    "id": 22,
+    "id": 25,
     "type": "Static",
     "color": [0.02, 0.0, 0.05, 1.0],
     "density": 999,
@@ -391,7 +448,7 @@
     "animType": "Void"
   },
   "BlackHole": {
-    "id": 23,
+    "id": 26,
     "type": "Static",
     "color": [0.0, 0.0, 0.0, 1.0],
     "density": 999,
@@ -410,7 +467,7 @@
     "animType": "BlackHole"
   },
   "WoodTip": {
-    "id": 24,
+    "id": 27,
     "color": [0.45, 0.28, 0.15, 1.0],
     "type": "Static",
     "density": 10.0,
@@ -427,7 +484,7 @@
     "animType": "None"
   },
   "LeafTip": {
-    "id": 25,
+    "id": 28,
     "color": [0.2, 0.65, 0.15, 1.0],
     "type": "Static",
     "density": 10.0,
@@ -444,7 +501,7 @@
     "animType": "None"
   },
   "Ice": {
-    "id": 26,
+    "id": 29,
     "type": "Static",
     "color": [0.7, 0.85, 0.95, 0.9],
     "density": 8,
@@ -459,7 +516,7 @@
     "animType": "None"
   },
   "Steam": {
-    "id": 27,
+    "id": 30,
     "type": "Gas",
     "color": [0.85, 0.9, 0.95, 0.35],
     "density": -3,
@@ -474,7 +531,7 @@
     "animType": "None"
   },
   "Cloud": {
-    "id": 28,
+    "id": 31,
     "type": "Static",
     "color": [0.9, 0.92, 0.95, 0.7],
     "density": -4,

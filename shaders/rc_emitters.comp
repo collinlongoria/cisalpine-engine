@@ -73,6 +73,11 @@ void main() {
             if (intensity <= 0.0) intensity = 1.5;
             emission = vec3(1.0, 0.98, 0.9) * intensity;
         }
+        else if(elem == REDLED || elem == BLUELED || elem == GREENLED){
+            float intensity = elements[elem].lightIntensity;
+            if (intensity <= 0.0) intensity = 1.5;
+            emission = vec3(elements[elem].transmissionTint.r, elements[elem].transmissionTint.g, elements[elem].transmissionTint.b) * intensity;
+        }
         // Phase 3: Fire via animType
         else if (anim == ANIM_FIRE) {
             float flicker = sin(time * 8.0 + variation * 10.0) * 0.3 + 0.7;
