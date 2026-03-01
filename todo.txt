@@ -5,19 +5,14 @@ Engine Features:
 - Web build (emscripten, webgl/wgpu?)
 
 Simulation Features:
-- Temperature layer for more accurate heat/cold interactions (Similar buffer to physics layer)
-^ this will allow for interactions beyond say, metal -> lava. Metal may have behaviors for being beyond 'melting point'
 
 Rendering Features:
-- Radiance Cascades for lighting
 
 Elements:
-- Colored lights
+- Colored lights (partially implemented)
 - Flowers
 - Bee & Honeycomb
 - Objects (loaded in via sprites in assets folder)
-- Ice
-- Cloud
 - Duplicator
 - Fan (should be able to change direction)
 - Lightning
@@ -28,7 +23,8 @@ Elements:
 
 Known issues:
 - Dragging mouse does not behave properly
-- Diagonal interactions in some cases are still an issue
+- Needs improvement for handling elements inside the lighting and simulation
+^ need a fix for scripting interactions, more data driven and less type checks
 
 Optimizations:
 
@@ -36,3 +32,6 @@ Optimizations:
 - Compute/Rendering pipeline debug info
 - Need to implement a chunking system that marks chunks as awake or alseep. Then use glComputeIndirect
 - Debug views & OpenGL timer queries
+- Radiance Cascades for lighting
+- Ice
+- Cloud
