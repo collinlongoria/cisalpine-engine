@@ -9,7 +9,6 @@ Simulation Features:
 Rendering Features:
 
 Elements:
-- Colored lights (partially implemented)
 - Flowers
 - Bee & Honeycomb
 - Objects (loaded in via sprites in assets folder)

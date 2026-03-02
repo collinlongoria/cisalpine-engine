@@ -86,7 +86,7 @@ void main() {
             if (intensity <= 0.0) intensity = 1.5;
             emission = vec3(1.0, 0.98, 0.9) * intensity;
         }
-        else if(elem == REDLIGHT || elem == BLUELIGHT || elem == GREENLIGHT){
+        else if(elem == REDLIGHT || elem == BLUELIGHT || elem == GREENLIGHT || elem == CYANLIGHT || elem == YELLOWLIGHT || elem == MAGENTALIGHT){
             float intensity = elements[elem].lightIntensity;
             if (intensity <= 0.0) intensity = 1.5;
             emission = vec3(elements[elem].transmissionTint.r, elements[elem].transmissionTint.g, elements[elem].transmissionTint.b) * intensity;
@@ -130,7 +130,8 @@ void main() {
             else if (hue < 5.0/6.0) rgb = vec3(x, 0.0, c);
             else rgb = vec3(c, 0.0, x);
             float intensity = elements[elem].lightIntensity;
-            emission = rgb * intensity * glowIntensity;
+            if (intensity <= 0.0) intensity = 1.5;
+            emission = rgb * intensity;;
         }
         // Generic glow
         else if (elements[elem].glow == 1) {

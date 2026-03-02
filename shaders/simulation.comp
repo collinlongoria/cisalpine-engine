@@ -391,19 +391,6 @@ ivec2 desiredDest(ivec2 src, uint elem) {
 
             float roll = float(hash3u(uvec2(src), frameCount) & 0xFFFFu) / 65535.0;
             if (roll < driftChance) {
-                // Low-mass elements also consider pure horizontal movement
-                if (elemMass < 0.5) {
-                    float horizRoll = float(hash3u(uvec2(src), frameCount * 5u + 3u) & 0xFFFFu) / 65535.0;
-                    if (horizRoll < 0.3 / max(elemMass, 0.01)) {
-                        if (leftFirst) {
-                            if (canDisplace(elem, getElement(left))) return left;
-                            if (canDisplace(elem, getElement(right))) return right;
-                        } else {
-                            if (canDisplace(elem, getElement(right))) return right;
-                            if (canDisplace(elem, getElement(left))) return left;
-                        }
-                    }
-                }
                 if (leftFirst) {
                     if (canDisplace(elem, getElement(downL))) return downL;
                     if (canDisplace(elem, getElement(downR))) return downR;

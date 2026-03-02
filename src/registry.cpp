@@ -23,7 +23,7 @@ void Registry::load(const std::string &filename) {
         throw std::runtime_error("Failed to open elements file: " + filename);
     }
 
-    nlohmann::json j = nlohmann::json::parse(f);
+    nlohmann::ordered_json j = nlohmann::ordered_json::parse(f);
 
     int elementCount = static_cast<int>(j.size());
     gpuData.resize(elementCount);
