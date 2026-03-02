@@ -52,8 +52,20 @@ struct GPUElementData {
     float colorVariation;       // 4 bytes  (offset 100)
     int animType;               // 4 bytes  (offset 104) - 0=None, 1=Liquid, 2=Fire, 3=Void, 4=BlackHole
     int _pad;                   // 4 bytes  (offset 108)
+    float highTempTransition;   // 4 bytes  (offset 112)
+    int highTempElement;        // 4 bytes  (offset 116)
+    float lowTempTransition;    // 4 bytes  (offset 120)
+    int lowTempElement;         // 4 bytes  (offset 124)
+    int tempModifierType;       // 4 bytes  (offset 128) - 0=Standard, 1=Exothermic, 2=Endothermic
+    float tempModifierRate;     // 4 bytes  (offset 132)
+    float mass;                 // 4 bytes  (offset 136)
+    int _pad3;                  // 4 bytes  (offset 140)
+    int _pad4;                  // 4 bytes  (offset 144)
+    int _pad5;                  // 4 bytes  (offset 148)
+    int _pad6;                  // 4 bytes  (offset 152)
+    int _pad7;                  // 4 bytes  (offset 156)
 };
-static_assert(sizeof(GPUElementData) == 112, "GPUElementData must be 112 bytes for std430");
+static_assert(sizeof(GPUElementData) == 160, "GPUElementData must be 160 bytes for std430");
 
 class Registry {
 public:

@@ -28,6 +28,18 @@ struct ElementData {
     float colorVariation;      // 100-103
     int animType;              // 104-107
     int _pad;                  // 108-111
+    float highTempTransition;  // 112-115
+    int highTempElement;       // 116-119
+    float lowTempTransition;   // 120-123
+    int lowTempElement;        // 124-127
+    int tempModifierType;      // 128-131
+    float tempModifierRate;    // 132-135
+    float mass;                // 136-139
+    int _pad3;                 // 140-143
+    int _pad4;                 // 144-147
+    int _pad5;                 // 148-151
+    int _pad6;                 // 152-155
+    int _pad7;                 // 156-159
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
@@ -46,6 +58,7 @@ const int ANIM_LIQUID    = 1;
 const int ANIM_FIRE      = 2;
 const int ANIM_VOID      = 3;
 const int ANIM_BLACKHOLE = 4;
+const int ANIM_RAINBOW   = 5;
 
 float hashNoise(ivec2 pos) {
     return fract(sin(dot(vec2(pos), vec2(12.9898, 78.233))) * 43758.5453);
@@ -73,7 +86,7 @@ void main() {
             if (intensity <= 0.0) intensity = 1.5;
             emission = vec3(1.0, 0.98, 0.9) * intensity;
         }
-        else if(elem == REDLED || elem == BLUELED || elem == GREENLED){
+        else if(elem == REDLIGHT || elem == BLUELIGHT || elem == GREENLIGHT){
             float intensity = elements[elem].lightIntensity;
             if (intensity <= 0.0) intensity = 1.5;
             emission = vec3(elements[elem].transmissionTint.r, elements[elem].transmissionTint.g, elements[elem].transmissionTint.b) * intensity;
@@ -103,6 +116,21 @@ void main() {
             if (fuseProgress > 0.5) {
                 emission = vec3(1.0, 0.2, 0.0) * fuseProgress * glowIntensity * 0.8;
             }
+        }
+        // Rainbow: cycling colored light emission
+        else if (anim == ANIM_RAINBOW) {
+            float hue = fract(time * 0.15 + float(pos.x + pos.y) * 0.005);
+            float c = 1.0;
+            float x = c * (1.0 - abs(mod(hue * 6.0, 2.0) - 1.0));
+            vec3 rgb;
+            if (hue < 1.0/6.0) rgb = vec3(c, x, 0.0);
+            else if (hue < 2.0/6.0) rgb = vec3(x, c, 0.0);
+            else if (hue < 3.0/6.0) rgb = vec3(0.0, c, x);
+            else if (hue < 4.0/6.0) rgb = vec3(0.0, x, c);
+            else if (hue < 5.0/6.0) rgb = vec3(x, 0.0, c);
+            else rgb = vec3(c, 0.0, x);
+            float intensity = elements[elem].lightIntensity;
+            emission = rgb * intensity * glowIntensity;
         }
         // Generic glow
         else if (elements[elem].glow == 1) {

@@ -402,6 +402,7 @@ void App::renderSettingsWindow() {
         ImGui::Text("Chunks: %d/%d active", world->getActiveChunkCount(), world->getTotalChunks());
         ImGui::Text("Grid: %dx%d", world->getChunkGridWidth(), world->getChunkGridHeight());
     }
+    ImGui::SliderFloat("Entropy", &simSettings.globalEntropy, 0.1f, 3.0f, "%.2f");
 
     ImGui::Spacing();
     ImGui::Text("Temperature");

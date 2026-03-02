@@ -25,17 +25,11 @@ void Registry::load(const std::string &filename) {
 
     nlohmann::json j = nlohmann::json::parse(f);
 
-    // Resize vector to fit largest ID found + 1
-    int maxId = 0;
-    for (auto& [key, val] : j.items()) {
-        if (val.contains("id") && val["id"].get<int>() > maxId) {
-            maxId = val["id"].get<int>();
-        }
-    }
-    gpuData.resize(maxId + 1);
-    names.resize(maxId + 1);
-    singleClickFlags.resize(maxId + 1, false);
-    hiddenFlags.resize(maxId + 1, false);
+    int elementCount = static_cast<int>(j.size());
+    gpuData.resize(elementCount);
+    names.resize(elementCount);
+    singleClickFlags.resize(elementCount, false);
+    hiddenFlags.resize(elementCount, false);
 
     // Initialize all elements with defaults
     for (auto& d : gpuData) {
@@ -62,10 +56,47 @@ void Registry::load(const std::string &filename) {
         d.colorVariation = 0.1f;
         d.animType = 0;
         d._pad = 0;
+        d.highTempTransition = 99999.0f;
+        d.highTempElement = 0;
+        d.lowTempTransition = -99999.0f;
+        d.lowTempElement = 0;
+        d.tempModifierType = 0;
+        d.tempModifierRate = 0.0f;
+        d.mass = 1.0f;
+        d._pad3 = 0;
+        d._pad4 = 0;
+        d._pad5 = 0;
+        d._pad6 = 0;
+        d._pad7 = 0;
     }
 
+    // Auto-assign IDs based on JSON entry order
+    // If an element has an explicit "id" field, use it; otherwise auto-increment
+    int autoId = 0;
     for (auto& [key, val] : j.items()) {
-        int id = val["id"].get<int>();
+        int id;
+        if (val.contains("id")) {
+            id = val["id"].get<int>();
+        } else {
+            id = autoId;
+        }
+        autoId = id + 1;
+
+        // Grow vectors if needed
+        if (id >= static_cast<int>(gpuData.size())) {
+            int newSize = id + 1;
+            gpuData.resize(newSize);
+            names.resize(newSize);
+            singleClickFlags.resize(newSize, false);
+            hiddenFlags.resize(newSize, false);
+            // Initialize new entries
+            for (int i = elementCount; i < newSize; i++) {
+                gpuData[i] = GPUElementData{};
+                gpuData[i].mass = 1.0f;
+            }
+            elementCount = newSize;
+        }
+
         names[id] = key;
         nameToId[key] = id;
 
@@ -153,6 +184,20 @@ void Registry::load(const std::string &filename) {
         }
         d._pad = 0;
 
+        // Phase transition fields
+        d.highTempTransition = val.value("highTempTransition", 99999.0f);
+        d.highTempElement = val.value("highTempElement", 0);
+        d.lowTempTransition = val.value("lowTempTransition", -99999.0f);
+        d.lowTempElement = val.value("lowTempElement", 0);
+        d.tempModifierType = val.value("tempModifierType", 0);
+        d.tempModifierRate = val.value("tempModifierRate", 0.0f);
+        d.mass = val.value("mass", 1.0f);
+        d._pad3 = 0;
+        d._pad4 = 0;
+        d._pad5 = 0;
+        d._pad6 = 0;
+        d._pad7 = 0;
+
         // CPU-only properties
         singleClickFlags[id] = val.value("singleClick", false);
         hiddenFlags[id] = val.value("hidden", false);
@@ -184,6 +229,7 @@ int Registry::parseAnimType(const std::string& animStr) {
     if (animStr == "Fire") return 2;
     if (animStr == "Void") return 3;
     if (animStr == "BlackHole") return 4;
+    if (animStr == "Rainbow") return 5;
     return 0; // Default to None
 }
 

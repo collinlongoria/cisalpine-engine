@@ -30,6 +30,18 @@ struct ElementData {
     float colorVariation;      // 100-103
     int animType;              // 104-107
     int _pad;                  // 108-111
+    float highTempTransition;  // 112-115
+    int highTempElement;       // 116-119
+    float lowTempTransition;   // 120-123
+    int lowTempElement;        // 124-127
+    int tempModifierType;      // 128-131
+    float tempModifierRate;    // 132-135
+    float mass;                // 136-139
+    int _pad3;                 // 140-143
+    int _pad4;                 // 144-147
+    int _pad5;                 // 148-151
+    int _pad6;                 // 152-155
+    int _pad7;                 // 156-159
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
@@ -48,6 +60,22 @@ const int ANIM_LIQUID    = 1;
 const int ANIM_FIRE      = 2;
 const int ANIM_VOID      = 3;
 const int ANIM_BLACKHOLE = 4;
+const int ANIM_RAINBOW   = 5;
+
+// HSL to RGB conversion for rainbow cycling
+vec3 hsl2rgb(float h, float s, float l) {
+    float c = (1.0 - abs(2.0 * l - 1.0)) * s;
+    float x = c * (1.0 - abs(mod(h * 6.0, 2.0) - 1.0));
+    float m = l - c * 0.5;
+    vec3 rgb;
+    if (h < 1.0/6.0) rgb = vec3(c, x, 0.0);
+    else if (h < 2.0/6.0) rgb = vec3(x, c, 0.0);
+    else if (h < 3.0/6.0) rgb = vec3(0.0, c, x);
+    else if (h < 4.0/6.0) rgb = vec3(0.0, x, c);
+    else if (h < 5.0/6.0) rgb = vec3(x, 0.0, c);
+    else rgb = vec3(c, 0.0, x);
+    return rgb + m;
+}
 
 // Helpers
 
@@ -398,6 +426,49 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
         return vec4(clamp(iceColor, 0.0, 1.0), 0.9);
     }
 
+    // LIQUID NITROGEN - cold blue with frost vapor
+    if (element == LIQUIDNITROGEN) {
+        float frost = sin(time * 3.0 + float(pos.x) * 0.7 + float(pos.y) * 0.5) * 0.08;
+        vec3 lnColor = vec3(0.65 + frost, 0.82 + frost * 0.5, 1.0);
+        lnColor += (variation - 0.5) * 0.08;
+        float vapor = pow(max(sin(time * 5.0 + variation * 12.0), 0.0), 6.0) * 0.1;
+        lnColor += vapor;
+        return vec4(clamp(lnColor, 0.0, 1.0), 0.6);
+    }
+
+    // DRY ICE - frosty white with sublimation shimmer
+    if (element == DRYICE) {
+        float sublimate = sin(time * 2.0 + float(pos.x) * 0.4 + float(pos.y) * 0.3) * 0.04;
+        vec3 diColor = vec3(0.85 + sublimate, 0.90 + sublimate * 0.5, 0.95);
+        diColor += (variation - 0.5) * 0.06;
+        return vec4(clamp(diColor, 0.0, 1.0), 0.9);
+    }
+
+    // MOLTEN IRON - intense orange-white glow
+    if (element == MOLTENIRON) {
+        float flicker = sin(time * 8.0 + variation * 8.0) * 0.5 + 0.5;
+        vec3 miColor = vec3(1.0, 0.55 + flicker * 0.15, 0.1);
+        miColor += (variation - 0.5) * 0.1;
+        return vec4(clamp(miColor, 0.0, 1.0), 1.0);
+    }
+
+    // FUSER - pulsing golden glow
+    if (element == FUSER) {
+        float pulse = sin(time * 4.0 + variation * 6.28) * 0.15 + 0.85;
+        vec3 fuserColor = vec3(1.0, 0.85, 0.0) * pulse;
+        fuserColor += (variation - 0.5) * 0.05;
+        return vec4(clamp(fuserColor, 0.0, 1.0), 1.0);
+    }
+
+    // RAINBOW NEON - cycles through color spectrum
+    if (anim == ANIM_RAINBOW) {
+        float hue = fract(time * 0.15 + variation * 0.1);
+        vec3 rainbowColor = hsl2rgb(hue, 1.0, 0.55);
+        float pulse = sin(time * 3.0 + variation * 6.28) * 0.1 + 0.9;
+        rainbowColor *= pulse;
+        return vec4(clamp(rainbowColor, 0.0, 1.0), 1.0);
+    }
+
     // Grass
     if (element == GRASS) {
         float lifeFactor = float(life) / 255.0;
@@ -416,6 +487,27 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
     if (element == SAPLING) {
         float pulse = sin(time * 4.0) * 0.15 + 0.85;
         varied *= pulse;
+    }
+
+    // AEROGEL - translucent blue shimmer with iridescence
+    if (element == AEROGEL) {
+        float shimmer = sin(time * 2.0 + variation * 12.0 + float(pos.x) * 0.3) * 0.1;
+        varied += shimmer;
+        // Slight iridescent tint shift
+        float iri = sin(time * 0.5 + float(pos.x + pos.y) * 0.1) * 0.08;
+        varied.r += iri;
+        varied.b -= iri;
+        varied = clamp(varied, 0.0, 1.0);
+    }
+
+    // HEAVY SAND - dark iron-flecked granules with subtle metallic glint
+    if (element == HEAVYSAND) {
+        float glint = pow(max(sin(time * 3.0 + variation * 25.0), 0.0), 12.0) * 0.15;
+        varied += glint;
+        // Dark iron flecks
+        if (variation > 0.7) {
+            varied *= 0.7;
+        }
     }
 
     // Gemstones

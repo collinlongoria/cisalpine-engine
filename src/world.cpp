@@ -626,6 +626,7 @@ void World::simulationStep() {
     simulationShader.setVec2("worldSize", static_cast<float>(worldWidth), static_cast<float>(worldHeight));
     simulationShader.setFloat("time", simulationTime);
     simulationShader.setUint("frameCount", frameCount);
+    simulationShader.setFloat("globalEntropy", simSettings.globalEntropy);
 
     gpuTimers[TIMER_SIMULATION].begin();
 

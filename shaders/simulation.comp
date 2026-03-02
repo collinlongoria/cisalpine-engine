@@ -32,6 +32,18 @@ struct ElementData {
     float colorVariation;      // 100-103
     int animType;              // 104-107
     int _pad;                  // 108-111
+    float highTempTransition;  // 112-115
+    int highTempElement;       // 116-119
+    float lowTempTransition;   // 120-123
+    int lowTempElement;        // 124-127
+    int tempModifierType;      // 128-131
+    float tempModifierRate;    // 132-135
+    float mass;                // 136-139
+    int _pad3;                 // 140-143
+    int _pad4;                 // 144-147
+    int _pad5;                 // 148-151
+    int _pad6;                 // 152-155
+    int _pad7;                 // 156-159
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
@@ -71,6 +83,7 @@ uniform vec2  worldSize;
 uniform float time;
 uniform uint  frameCount;
 uniform bool  useChunkSleep;
+uniform float globalEntropy;
 
 const int TYPE_STATIC   = 0;
 const int TYPE_GRANULAR = 1;
@@ -367,13 +380,30 @@ ivec2 desiredDest(ivec2 src, uint elem) {
     // element drift
     if (type == TYPE_GRANULAR) {
         float density = elements[elem].density;
+        float elemMass = elements[elem].mass;
 
         // Only apply drift to elements that are actively falling
         if (canDisplace(elem, getElement(down))) {
+            // Mass-based drift: low mass = more horizontal scatter
             float driftChance = clamp(3.0 / max(density, 0.5), 0.02, 0.5);
+            driftChance *= clamp(1.0 / max(elemMass, 0.01), 0.5, 10.0);
+            driftChance = clamp(driftChance, 0.02, 0.95);
 
             float roll = float(hash3u(uvec2(src), frameCount) & 0xFFFFu) / 65535.0;
             if (roll < driftChance) {
+                // Low-mass elements also consider pure horizontal movement
+                if (elemMass < 0.5) {
+                    float horizRoll = float(hash3u(uvec2(src), frameCount * 5u + 3u) & 0xFFFFu) / 65535.0;
+                    if (horizRoll < 0.3 / max(elemMass, 0.01)) {
+                        if (leftFirst) {
+                            if (canDisplace(elem, getElement(left))) return left;
+                            if (canDisplace(elem, getElement(right))) return right;
+                        } else {
+                            if (canDisplace(elem, getElement(right))) return right;
+                            if (canDisplace(elem, getElement(left))) return left;
+                        }
+                    }
+                }
                 if (leftFirst) {
                     if (canDisplace(elem, getElement(downL))) return downL;
                     if (canDisplace(elem, getElement(downR))) return downR;
@@ -763,50 +793,44 @@ void main() {
         }
     }
 
-    // === Phase 2: THERMODYNAMIC PHASE CHANGES ===
-    // Read temperature at this pixel and apply phase transitions
+    // === DATA-DRIVEN THERMODYNAMIC PHASE CHANGES ===
     if (elem != EMPTY && elem < MAX_ELEMENTS) {
         float temp = getTemperature(pos);
 
-        // Water freezes to Ice at T < 0
-        if (elem == WATER && temp < 0.0) {
-            float freezeChance = clamp((0.0 - temp) / 20.0, 0.0, 0.6);
-            float roll = float(hash3u(uvec2(pos), frameCount * 19u + 3u) & 0xFFFFu) / 65535.0;
-            if (roll < freezeChance) {
-                imageStore(stateOut, pos, uvec4(ICE, 0u, 0, 0));
-                wakeChunkAndNeighbors(pos);
-                return;
-            }
-        }
+        float highTransition = elements[elem].highTempTransition;
+        int highElement = elements[elem].highTempElement;
+        float lowTransition = elements[elem].lowTempTransition;
+        int lowElement = elements[elem].lowTempElement;
 
-        // Water boils to Steam at T > 100
-        if (elem == WATER && temp > 100.0) {
-            float boilChance = clamp((temp - 100.0) / 50.0, 0.0, 0.8);
+        // High temperature transition
+        if (highTransition < 99000.0 && highElement > 0 && temp > highTransition) {
+            float overshoot = temp - highTransition;
+            float transitionChance = clamp(overshoot / 50.0, 0.0, 0.8) * globalEntropy;
             float roll = float(hash3u(uvec2(pos), frameCount * 13u + 7u) & 0xFFFFu) / 65535.0;
-            if (roll < boilChance) {
-                imageStore(stateOut, pos, uvec4(STEAM, 0u, 0, 0));
+            if (roll < transitionChance) {
+                uint newElem = uint(highElement);
+                uint newLife = 0u;
+                if (newElem < MAX_ELEMENTS && elements[newElem].maxLife > 0) {
+                    newLife = uint(elements[newElem].maxLife);
+                }
+                imageStore(stateOut, pos, uvec4(newElem, newLife, 0u, 0u));
                 wakeChunkAndNeighbors(pos);
                 return;
             }
         }
 
-        // Ice melts to Water at T > 5
-        if (elem == ICE && temp > 5.0) {
-            float meltChance = clamp((temp - 5.0) / 30.0, 0.0, 0.5);
-            float roll = float(hash3u(uvec2(pos), frameCount * 23u + 5u) & 0xFFFFu) / 65535.0;
-            if (roll < meltChance) {
-                imageStore(stateOut, pos, uvec4(WATER, 0u, 0, 0));
-                wakeChunkAndNeighbors(pos);
-                return;
-            }
-        }
-
-        // Steam condenses to Water when cooled below 80
-        if (elem == STEAM && temp < 80.0) {
-            float condenseChance = clamp((80.0 - temp) / 40.0, 0.0, 0.3);
-            float roll = float(hash3u(uvec2(pos), frameCount * 29u + 13u) & 0xFFFFu) / 65535.0;
-            if (roll < condenseChance) {
-                imageStore(stateOut, pos, uvec4(WATER, 0u, 0, 0));
+        // Low temperature transition (with hysteresis check)
+        if (lowTransition > -99000.0 && lowElement > 0 && temp < lowTransition) {
+            float undershoot = lowTransition - temp;
+            float transitionChance = clamp(undershoot / 50.0, 0.0, 0.6) * globalEntropy;
+            float roll = float(hash3u(uvec2(pos), frameCount * 19u + 3u) & 0xFFFFu) / 65535.0;
+            if (roll < transitionChance) {
+                uint newElem = uint(lowElement);
+                uint newLife = 0u;
+                if (newElem < MAX_ELEMENTS && elements[newElem].maxLife > 0) {
+                    newLife = uint(elements[newElem].maxLife);
+                }
+                imageStore(stateOut, pos, uvec4(newElem, newLife, 0u, 0u));
                 wakeChunkAndNeighbors(pos);
                 return;
             }
@@ -825,9 +849,8 @@ void main() {
                     }
                 }
             }
-            // Need at least 6 nearby steam/cloud to form a cloud
             if (steamCount >= 6) {
-                float cloudChance = 0.08;
+                float cloudChance = 0.08 * globalEntropy;
                 float roll = float(hash3u(uvec2(pos), frameCount * 31u + 17u) & 0xFFFFu) / 65535.0;
                 if (roll < cloudChance) {
                     imageStore(stateOut, pos, uvec4(CLOUD, 255u, 0, 0));
@@ -835,30 +858,22 @@ void main() {
                     return;
                 }
             }
-            // Steam stays awake so it can keep moving up
             wakeChunkAndNeighbors(pos);
         }
 
-        // Cloud behavior: slowly rain (produce water below) and decay
+        // Cloud behavior: slowly rain and decay
         if (elem == CLOUD) {
-            // Rain: chance to spawn water below
             ivec2 below = pos + ivec2(0, -1);
             if (inBounds(below) && getElement(below) == EMPTY) {
-                float rainChance = 0.008;
+                float rainChance = 0.008 * globalEntropy;
                 float roll = float(hash3u(uvec2(pos), frameCount * 37u + 23u) & 0xFFFFu) / 65535.0;
-                if (roll < rainChance && life > 10u) {
-                    // Reduce cloud life when it rains
+                if (rainChance > 0.0 && roll < rainChance && life > 10u) {
                     cur.g = life - 5u;
-                    // The water will be spawned by the empty cell's movement logic
-                    // Instead, we directly create water below on the next step
-                    // For now, just note: cloud decays via life
                 }
             }
 
-            // Slow life decay for clouds
             uint cloudDecay = 1u;
             uint randDecay = hash3u(uvec2(pos), frameCount * 41u) % 3u;
-            // Only decay sometimes
             if (randDecay == 0u) {
                 if (life <= cloudDecay) {
                     imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
@@ -870,82 +885,14 @@ void main() {
             wakeChunkAndNeighbors(pos);
         }
 
-        // Lava cools to Obsidian when cold enough (T < 200)
-        if (elem == LAVA && temp < 200.0) {
-            float coolChance = clamp((200.0 - temp) / 100.0, 0.0, 0.3);
-            float roll = float(hash3u(uvec2(pos), frameCount * 17u + 11u) & 0xFFFFu) / 65535.0;
-            if (roll < coolChance) {
-                imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0, 0));
-                wakeChunkAndNeighbors(pos);
-                return;
-            }
+        // Fuser logic: forces neighbors to reach their high transition temperature
+        if (elem == FUSER) {
+            wakeChunkAndNeighbors(pos);
         }
     }
 
     // REACTION LOGIC
-
-    // Water + Lava interaction (kept for direct contact, supplements thermal system)
-    if (elem == WATER) {
-        ivec2 lavaPos = ivec2(-1);
-        for (int dy = -1; dy <= 1; dy++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                if (dx == 0 && dy == 0) continue;
-                ivec2 np = pos + ivec2(dx, dy);
-                if (getElement(np) == LAVA) {
-                    lavaPos = np;
-                }
-            }
-        }
-        if (lavaPos.x >= 0) {
-            float reactRoll = float(hash3u(uvec2(pos), frameCount * 3u + 17u) & 0xFFFFu) / 65535.0;
-            if (reactRoll < 0.6) {
-                imageStore(stateOut, pos, uvec4(SMOKE, 200u, 0, 0));
-                wakeChunkAndNeighbors(pos);
-                return;
-            }
-        }
-    }
-    if (elem == LAVA) {
-        bool touchingWater = false;
-        for (int dy = -1; dy <= 1; dy++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                if (dx == 0 && dy == 0) continue;
-                if (getElement(pos + ivec2(dx, dy)) == WATER) {
-                    touchingWater = true;
-                }
-            }
-        }
-        if (touchingWater) {
-            float reactRoll = float(hash3u(uvec2(pos), frameCount * 5u + 23u) & 0xFFFFu) / 65535.0;
-            if (reactRoll < 0.6) {
-                imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0, 0));
-                wakeChunkAndNeighbors(pos);
-                return;
-            }
-        }
-    }
-
-    // Stone + Lava interaction: lava melts stone into more lava
-    if (elem == STONE) {
-        bool touchingLava = false;
-        for (int dy = -1; dy <= 1; dy++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                if (dx == 0 && dy == 0) continue;
-                if (getElement(pos + ivec2(dx, dy)) == LAVA) {
-                    touchingLava = true;
-                }
-            }
-        }
-        if (touchingLava) {
-            // Stone melts slowly into lava
-            float meltRoll = float(hash3u(uvec2(pos), frameCount * 11u + 41u) & 0xFFFFu) / 65535.0;
-            if (meltRoll < 0.08) {
-                imageStore(stateOut, pos, uvec4(LAVA, 0u, 0, 0));
-                wakeChunkAndNeighbors(pos);
-                return;
-            }
-        }
-    }
+    // (Contact reactions removed - now handled by data-driven thermal system)
     // SMOKE DECAY
     if (elem == SMOKE) {
         if (life == 0u) {

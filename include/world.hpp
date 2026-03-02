@@ -55,6 +55,9 @@ struct SimulationSettings {
     float ambientTemperature = 20.0f;
     float ambientTempOverride = 20.0f;  // Manual override from slider
     bool useAutoAmbientTemp = true;     // Derive from time of day
+
+    // Global entropy scalar for probabilistic reactions
+    float globalEntropy = 1.0f;
 };
 
 struct RenderSettings {
