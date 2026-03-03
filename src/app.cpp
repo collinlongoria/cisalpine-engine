@@ -334,16 +334,6 @@ void App::handleInput(float dt) {
             // Bind current state texture for read/write
             glBindImageTexture(0, world->getCurrentTexture(), 0, GL_FALSE, 0, GL_READ_WRITE, GL_RGBA8UI);
 
-            // Bug Fix #3: Also bind temperature texture so brush can stamp baseTemperature
-            glBindImageTexture(2, world->getCurrentTemperatureTexture(), 0, GL_FALSE, 0, GL_READ_WRITE, GL_R16F);
-
-            // Pass base temperature for the selected element
-            float baseTemp = 20.0f;
-            if (!erasing && selectedElementId < static_cast<int>(registry.getNames().size())) {
-                baseTemp = registry.getBaseTemperature(selectedElementId);
-            }
-            brushShader.setFloat("baseTemperature", baseTemp);
-
             // Dispatch enough groups to cover brush size
             int groups = (effectiveBrushSize * 2 + 16) / 16;
             brushShader.dispatch(groups, groups, 1);
@@ -403,15 +393,6 @@ void App::renderSettingsWindow() {
         ImGui::Text("Grid: %dx%d", world->getChunkGridWidth(), world->getChunkGridHeight());
     }
     ImGui::SliderFloat("Entropy", &simSettings.globalEntropy, 0.1f, 3.0f, "%.2f");
-
-    ImGui::Spacing();
-    ImGui::Text("Temperature");
-    ImGui::Checkbox("Auto from Time of Day", &simSettings.useAutoAmbientTemp);
-    if (!simSettings.useAutoAmbientTemp) {
-        ImGui::SliderFloat("Ambient Temp", &simSettings.ambientTemperature, -40.0f, 60.0f, "%.0f C");
-    } else {
-        ImGui::Text("Ambient: %.0f C (auto)", simSettings.ambientTemperature);
-    }
 
     ImGui::Spacing();
     ImGui::Separator();
@@ -836,26 +817,9 @@ void App::renderUI() {
             dayFactor = fmax(dayFactor, 0.0f);
             settings.ambientLight = 0.05f + dayFactor * 0.7f;
 
-            // Auto-derive ambient temperature from time of day
-            if (simSettings.useAutoAmbientTemp) {
-                // Night: ~5C, Dawn/Dusk: ~12C, Noon: ~30C
-                simSettings.ambientTemperature = 5.0f + dayFactor * 25.0f;
-            }
-
             ImGui::Checkbox("Show Sun", &settings.showSun);
         } else {
             ImGui::SliderFloat("Ambient", &settings.ambientLight, 0.0f, 1.0f);
-        }
-
-        // Ambient Temperature
-        ImGui::Separator();
-        ImGui::Text("Temperature");
-        ImGui::Checkbox("Auto##TempAuto", &simSettings.useAutoAmbientTemp);
-        ImGui::SameLine();
-        if (simSettings.useAutoAmbientTemp) {
-            ImGui::Text("Ambient: %.0f C", simSettings.ambientTemperature);
-        } else {
-            ImGui::SliderFloat("Ambient##Temp", &simSettings.ambientTemperature, -40.0f, 60.0f, "%.0f C");
         }
     }
 

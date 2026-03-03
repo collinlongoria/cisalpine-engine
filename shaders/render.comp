@@ -20,28 +20,14 @@ struct ElementData {
     float lightRadius;         // 48-51
     float lightIntensity;      // 52-55
     float ior;                 // 56-59
-    float baseTemperature;     // 60-63
-    float conductivity;        // 64-67
-    float specificHeat;        // 68-71
-    float opacity;             // 72-75
-    float specularPower;       // 76-79
+    float opacity;             // 60-63
+    float specularPower;       // 64-67
+    int _pad1, _pad2, _pad3;   // 68-79
     vec4 transmissionTint;     // 80-95
     float baseHeight;          // 96-99
     float colorVariation;      // 100-103
     int animType;              // 104-107
-    int _pad;                  // 108-111
-    float highTempTransition;  // 112-115
-    int highTempElement;       // 116-119
-    float lowTempTransition;   // 120-123
-    int lowTempElement;        // 124-127
-    int tempModifierType;      // 128-131
-    float tempModifierRate;    // 132-135
-    float mass;                // 136-139
-    int _pad3;                 // 140-143
-    int _pad4;                 // 144-147
-    int _pad5;                 // 148-151
-    int _pad6;                 // 152-155
-    int _pad7;                 // 156-159
+    float mass;                // 108-111
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {

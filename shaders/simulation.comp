@@ -6,9 +6,6 @@ layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8ui, binding = 1) uniform writeonly uimage2D stateOut;
 layout(rgba16f, binding = 3) uniform readonly image2D forceField;
 
-// Phase 2: Temperature texture (read-only)
-layout(r16f, binding = 4) uniform readonly image2D temperatureIn;
-
 struct ElementData {
     vec4 color;                // 0-15
     int type;                  // 16-19
@@ -22,28 +19,14 @@ struct ElementData {
     float lightRadius;         // 48-51
     float lightIntensity;      // 52-55
     float ior;                 // 56-59
-    float baseTemperature;     // 60-63
-    float conductivity;        // 64-67
-    float specificHeat;        // 68-71
-    float opacity;             // 72-75
-    float specularPower;       // 76-79
+    float opacity;             // 60-63
+    float specularPower;       // 64-67
+    int _pad1, _pad2, _pad3;   // 68-79
     vec4 transmissionTint;     // 80-95
     float baseHeight;          // 96-99
     float colorVariation;      // 100-103
     int animType;              // 104-107
-    int _pad;                  // 108-111
-    float highTempTransition;  // 112-115
-    int highTempElement;       // 116-119
-    float lowTempTransition;   // 120-123
-    int lowTempElement;        // 124-127
-    int tempModifierType;      // 128-131
-    float tempModifierRate;    // 132-135
-    float mass;                // 136-139
-    int _pad3;                 // 140-143
-    int _pad4;                 // 144-147
-    int _pad5;                 // 148-151
-    int _pad6;                 // 152-155
-    int _pad7;                 // 156-159
+    float mass;                // 108-111
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
@@ -202,12 +185,6 @@ uint getLife(ivec2 pos) { return getState(pos).g; }
 vec2 getForce(ivec2 pos) {
     if (!inBounds(pos)) return vec2(0.0);
     return imageLoad(forceField, pos).rg;
-}
-
-// Phase 2: Read temperature at a position
-float getTemperature(ivec2 pos) {
-    if (!inBounds(pos)) return 20.0; // room temperature
-    return imageLoad(temperatureIn, pos).r;
 }
 
 bool isDoomed(ivec2 pos) {
@@ -780,103 +757,115 @@ void main() {
         }
     }
 
-    // === DATA-DRIVEN THERMODYNAMIC PHASE CHANGES ===
-    if (elem != EMPTY && elem < MAX_ELEMENTS) {
-        float temp = getTemperature(pos);
+   // === MIGRATED HARDCODED INTERACTIONS ===
+       if (elem != EMPTY && elem < MAX_ELEMENTS) {
+           bool touchingFire = false;
+           bool touchingWater = false;
+           int steamCount = 0;
 
-        float highTransition = elements[elem].highTempTransition;
-        int highElement = elements[elem].highTempElement;
-        float lowTransition = elements[elem].lowTempTransition;
-        int lowElement = elements[elem].lowTempElement;
+           // Scan neighbors once
+           for (int dy = -1; dy <= 1; dy++) {
+               for (int dx = -1; dx <= 1; dx++) {
+                   if (dx == 0 && dy == 0) continue;
+                   ivec2 np = pos + ivec2(dx, dy);
+                   if (!inBounds(np)) continue;
 
-        // High temperature transition
-        if (highTransition < 99000.0 && highElement > 0 && temp > highTransition) {
-            float overshoot = temp - highTransition;
-            float transitionChance = clamp(overshoot / 50.0, 0.0, 0.8) * globalEntropy;
-            float roll = float(hash3u(uvec2(pos), frameCount * 13u + 7u) & 0xFFFFu) / 65535.0;
-            if (roll < transitionChance) {
-                uint newElem = uint(highElement);
-                uint newLife = 0u;
-                if (newElem < MAX_ELEMENTS && elements[newElem].maxLife > 0) {
-                    newLife = uint(elements[newElem].maxLife);
-                }
-                imageStore(stateOut, pos, uvec4(newElem, newLife, 0u, 0u));
-                wakeChunkAndNeighbors(pos);
-                return;
-            }
-        }
+                   uint nElem = getElement(np);
+                   if (nElem == FIRE || nElem == LAVA) touchingFire = true;
+                   if (nElem == WATER) touchingWater = true;
+                   if (nElem == STEAM || nElem == CLOUD) steamCount++;
+               }
+           }
 
-        // Low temperature transition (with hysteresis check)
-        if (lowTransition > -99000.0 && lowElement > 0 && temp < lowTransition) {
-            float undershoot = lowTransition - temp;
-            float transitionChance = clamp(undershoot / 50.0, 0.0, 0.6) * globalEntropy;
-            float roll = float(hash3u(uvec2(pos), frameCount * 19u + 3u) & 0xFFFFu) / 65535.0;
-            if (roll < transitionChance) {
-                uint newElem = uint(lowElement);
-                uint newLife = 0u;
-                if (newElem < MAX_ELEMENTS && elements[newElem].maxLife > 0) {
-                    newLife = uint(elements[newElem].maxLife);
-                }
-                imageStore(stateOut, pos, uvec4(newElem, newLife, 0u, 0u));
-                wakeChunkAndNeighbors(pos);
-                return;
-            }
-        }
+           float roll = float(hash3u(uvec2(pos), frameCount * 13u + 7u) & 0xFFFFu) / 65535.0;
 
-        // Steam accumulation -> Cloud: if enough steam neighbors, become cloud
-        if (elem == STEAM) {
-            int steamCount = 0;
-            for (int dy = -2; dy <= 2; dy++) {
-                for (int dx = -2; dx <= 2; dx++) {
-                    if (dx == 0 && dy == 0) continue;
-                    ivec2 np = pos + ivec2(dx, dy);
-                    if (inBounds(np)) {
-                        uint ne = getElement(np);
-                        if (ne == STEAM || ne == CLOUD) steamCount++;
-                    }
-                }
-            }
-            if (steamCount >= 6) {
-                float cloudChance = 0.08 * globalEntropy;
-                float roll = float(hash3u(uvec2(pos), frameCount * 31u + 17u) & 0xFFFFu) / 65535.0;
-                if (roll < cloudChance) {
-                    imageStore(stateOut, pos, uvec4(CLOUD, 255u, 0, 0));
-                    wakeChunkAndNeighbors(pos);
-                    return;
-                }
-            }
-            wakeChunkAndNeighbors(pos);
-        }
-
-        // Cloud behavior: slowly rain and decay
-        if (elem == CLOUD) {
-            ivec2 below = pos + ivec2(0, -1);
-            if (inBounds(below) && getElement(below) == EMPTY) {
-                float rainChance = 0.008 * globalEntropy;
-                float roll = float(hash3u(uvec2(pos), frameCount * 37u + 23u) & 0xFFFFu) / 65535.0;
-                if (rainChance > 0.0 && roll < rainChance && life > 10u) {
-                    cur.g = life - 5u;
-                }
-            }
-
-            uint cloudDecay = 1u;
-            uint randDecay = hash3u(uvec2(pos), frameCount * 41u) % 3u;
-            if (randDecay == 0u) {
-                if (life <= cloudDecay) {
-                    imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
-                    wakeChunkAndNeighbors(pos);
-                    return;
-                }
-                cur.g = life - cloudDecay;
-            }
-            wakeChunkAndNeighbors(pos);
-        }
-
-        // Fuser logic: forces neighbors to reach their high transition temperature
-        if (elem == FUSER) {
-            wakeChunkAndNeighbors(pos);
-        }
-    }
+           // Phase Changes
+           if (elem == ICE) {
+               if (touchingFire || roll < 0.002 * globalEntropy) { // Melts near fire or slowly at ambient
+                   imageStore(stateOut, pos, uvec4(WATER, 0u, 0u, 0u));
+                   wakeChunkAndNeighbors(pos); return;
+               }
+           }
+           else if (elem == WATER && touchingFire) {
+               if (roll < 0.15) { // Boils to steam
+                   imageStore(stateOut, pos, uvec4(STEAM, 255u, 0u, 0u));
+                   wakeChunkAndNeighbors(pos); return;
+               }
+           }
+           else if (elem == LAVA && touchingWater) {
+               if (roll < 0.8) { // Cools to obsidian
+                   imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0u, 0u));
+                   wakeChunkAndNeighbors(pos); return;
+               }
+           }
+           else if (elem == THERMITE && touchingFire) { // Ignites to molten iron
+               imageStore(stateOut, pos, uvec4(MOLTENIRON, 0u, 0u, 0u));
+               wakeChunkAndNeighbors(pos); return;
+           }
+           else if (elem == MOLTENIRON) { // Cools to obsidian
+               if (touchingWater || roll < 0.005) {
+                   imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0u, 0u));
+                   wakeChunkAndNeighbors(pos); return;
+               }
+           }
+           else if (elem == LIQUIDNITROGEN) { // Boils to N2
+               if (roll < 0.05 * globalEntropy) {
+                   imageStore(stateOut, pos, uvec4(N2GAS, 150u, 0u, 0u));
+                   wakeChunkAndNeighbors(pos); return;
+               }
+           }
+           else if (elem == DRYICE) { // Sublimates to CO2
+               if (roll < 0.02 * globalEntropy) {
+                   imageStore(stateOut, pos, uvec4(CO2GAS, 180u, 0u, 0u));
+                   wakeChunkAndNeighbors(pos); return;
+               }
+           }
+           else if (elem == STEAM) { // Condenses to cloud
+               if (steamCount >= 6 && roll < 0.08 * globalEntropy) {
+                   imageStore(stateOut, pos, uvec4(CLOUD, 255u, 0, 0));
+                   wakeChunkAndNeighbors(pos); return;
+               }
+               wakeChunkAndNeighbors(pos); // Keep awake
+           }
+           else if (elem == CLOUD) { // Cloud decay & rain (Kept from original logic)
+               ivec2 below = pos + ivec2(0, -1);
+               if (inBounds(below) && getElement(below) == EMPTY) {
+                   float rainChance = 0.008 * globalEntropy;
+                   if (roll < rainChance && life > 10u) cur.g = life - 5u;
+               }
+               uint cloudDecay = 1u;
+               uint randDecay = hash3u(uvec2(pos), frameCount * 41u) % 3u;
+               if (randDecay == 0u) {
+                   if (life <= cloudDecay) {
+                       imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                       wakeChunkAndNeighbors(pos); return;
+                   }
+                   cur.g = life - cloudDecay;
+               }
+               wakeChunkAndNeighbors(pos);
+           }
+           else if (elem == FUSER) { // Fuser melts/burns neighbors
+               for (int dy = -1; dy <= 1; dy++) {
+                   for (int dx = -1; dx <= 1; dx++) {
+                       ivec2 np = pos + ivec2(dx, dy);
+                       if (!inBounds(np)) continue;
+                       uint nElem = getElement(np);
+                       if (nElem == SAND || nElem == STONE || nElem == OBSIDIAN) {
+                           if (random01(np) < 0.05) {
+                               imageStore(stateOut, np, uvec4(LAVA, 0u, 0u, 0u));
+                               wakeChunkAndNeighbors(np);
+                           }
+                       } else if (isFlammable(nElem)) {
+                           if (random01(np) < 0.1) {
+                               imageStore(stateOut, np, uvec4(FIRE, 255u, 0u, 0u));
+                               wakeChunkAndNeighbors(np);
+                           }
+                       }
+                   }
+               }
+               wakeChunkAndNeighbors(pos);
+           }
+       }
 
     // REACTION LOGIC
     // (Contact reactions removed - now handled by data-driven thermal system)

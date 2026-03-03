@@ -7,7 +7,7 @@ uniform sampler2D displayTex;
 uniform sampler2D physicsTex;
 uniform sampler2D normalTex;
 uniform vec4 uvBounds;
-uniform int viewMode; // 0=normal, 1=normals remap, 2=lightmap, 3=force field, 4=temperature
+uniform int viewMode; // 0=normal, 1=normals remap, 2=lightmap, 3=force field
 
 void main() {
     // Remap TexCoord
@@ -43,18 +43,6 @@ void main() {
 
         float brightness = clamp(magnitude * 2.0, 0.0, 1.0);
         FragColor = vec4(color * brightness, 1.0);
-    }
-    else if (viewMode == 4) {
-        // Temperature View
-        float temp = texture(displayTex, uv).r;
-
-        // Map color ranges: Blue (-50->20) -> Black (20) -> Red (200) -> Yellow (800) -> White (1500+)
-        vec3 heat = mix(vec3(0.0, 0.3, 1.0), vec3(0.0, 0.0, 0.0), clamp((temp + 50.0) / 70.0, 0.0, 1.0));
-        heat = mix(heat, vec3(1.0, 0.1, 0.0), clamp((temp - 20.0) / 180.0, 0.0, 1.0));
-        heat = mix(heat, vec3(1.0, 1.0, 0.0), clamp((temp - 200.0) / 600.0, 0.0, 1.0));
-        heat = mix(heat, vec3(1.0, 1.0, 1.0), clamp((temp - 800.0) / 700.0, 0.0, 1.0));
-
-        FragColor = vec4(heat, 1.0);
     }
     else {
         // Default

@@ -46,28 +46,14 @@ void Registry::load(const std::string &filename) {
         d.lightRadius = 0.0f;
         d.lightIntensity = 0.0f;
         d.ior = 1.0f;
-        d.baseTemperature = 20.0f;
-        d.conductivity = 0.1f;
-        d.specificHeat = 1.0f;
         d.opacity = 0.85f;
         d.specularPower = 1.0f;
         d.transmissionTint = glm::vec4(1.0f, 1.0f, 1.0f, 1.0f);
         d.baseHeight = 1.0f;
         d.colorVariation = 0.1f;
         d.animType = 0;
-        d._pad = 0;
-        d.highTempTransition = 99999.0f;
-        d.highTempElement = 0;
-        d.lowTempTransition = -99999.0f;
-        d.lowTempElement = 0;
-        d.tempModifierType = 0;
-        d.tempModifierRate = 0.0f;
         d.mass = 1.0f;
         d._pad3 = 0;
-        d._pad4 = 0;
-        d._pad5 = 0;
-        d._pad6 = 0;
-        d._pad7 = 0;
     }
 
     // Auto-assign IDs based on JSON entry order
@@ -125,9 +111,6 @@ void Registry::load(const std::string &filename) {
         d.lightRadius = val.value("lightRadius", 0.0f);
         d.lightIntensity = val.value("lightIntensity", 0.0f);
         d.ior = val.value("ior", 1.45f);
-        d.baseTemperature = val.value("baseTemperature", 20.0f);
-        d.conductivity = val.value("conductivity", 0.1f);
-        d.specificHeat = val.value("specificHeat", 1.0f);
 
         if (val.contains("opacity")) {
             d.opacity = val["opacity"].get<float>();
@@ -182,21 +165,10 @@ void Registry::load(const std::string &filename) {
         } else {
             d.animType = 0; // None
         }
-        d._pad = 0;
 
         // Phase transition fields
-        d.highTempTransition = val.value("highTempTransition", 99999.0f);
-        d.highTempElement = val.value("highTempElement", 0);
-        d.lowTempTransition = val.value("lowTempTransition", -99999.0f);
-        d.lowTempElement = val.value("lowTempElement", 0);
-        d.tempModifierType = val.value("tempModifierType", 0);
-        d.tempModifierRate = val.value("tempModifierRate", 0.0f);
         d.mass = val.value("mass", 1.0f);
         d._pad3 = 0;
-        d._pad4 = 0;
-        d._pad5 = 0;
-        d._pad6 = 0;
-        d._pad7 = 0;
 
         // CPU-only properties
         singleClickFlags[id] = val.value("singleClick", false);
@@ -283,13 +255,6 @@ int Registry::getMaxLife(int id) const {
         return gpuData[id].maxLife;
     }
     return 0;
-}
-
-float Registry::getBaseTemperature(int id) const {
-    if (id >= 0 && id < static_cast<int>(gpuData.size())) {
-        return gpuData[id].baseTemperature;
-    }
-    return 20.0f;
 }
 
 }

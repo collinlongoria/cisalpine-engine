@@ -31,7 +31,6 @@ World::World(int width, int height)
 World::~World() {
     if (stateTextures[0]) glDeleteTextures(2, stateTextures);
     if (forceTextures[0]) glDeleteTextures(2, forceTextures);
-    if (temperatureTextures[0]) glDeleteTextures(2, temperatureTextures);
     if (colorTexture) glDeleteTextures(1, &colorTexture);
     if (normalTexture) glDeleteTextures(1, &normalTexture);
     if (lightmapTexture) glDeleteTextures(1, &lightmapTexture);
@@ -70,10 +69,6 @@ bool World::init(const std::string& shaderHeader) {
     }
     if (!forceUpdateShader.loadCompute("shaders/physics.comp", fullHeader)) {
         std::cerr << "Failed to load physics shader" << std::endl;
-        return false;
-    }
-    if (!temperatureShader.loadCompute("shaders/temperature.comp", fullHeader)) {
-        std::cerr << "Failed to load temperature shader" << std::endl;
         return false;
     }
     if (!renderShader.loadCompute("shaders/render.comp", fullHeader)) {
@@ -165,21 +160,6 @@ void World::createTextures() {
         std::vector<float> clearForce(worldWidth * worldHeight * 4, 0.0f);
         glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
             GL_RGBA, GL_FLOAT, clearForce.data());
-    }
-
-    glGenTextures(2, temperatureTextures);
-    for (int i = 0; i < 2; i++) {
-        glBindTexture(GL_TEXTURE_2D, temperatureTextures[i]);
-        glTexStorage2D(GL_TEXTURE_2D, 1, GL_R16F, worldWidth, worldHeight);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_NEAREST);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
-        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
-
-        // Initialize to room temperature (20.0)
-        std::vector<float> initTemp(worldWidth * worldHeight, 20.0f);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
-            GL_RED, GL_FLOAT, initTemp.data());
     }
 
     // Color texture (RGBA8)
@@ -467,14 +447,6 @@ void World::clear() {
             GL_RGBA, GL_FLOAT, clearForce.data());
     }
 
-    // Clear temperature to room temp
-    std::vector<float> clearTemp(worldWidth * worldHeight, 20.0f);
-    for (int i = 0; i < 2; i++) {
-        glBindTexture(GL_TEXTURE_2D, temperatureTextures[i]);
-        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
-            GL_RED, GL_FLOAT, clearTemp.data());
-    }
-
     glBindTexture(GL_TEXTURE_2D, 0);
     wakeAllChunks();
 }
@@ -539,10 +511,6 @@ void World::swapChunkGrids() {
     currentChunkGrid = 1 - currentChunkGrid;
 }
 
-void World::swapTemperatureBuffers() {
-    currentTempBuffer = 1 - currentTempBuffer;
-}
-
 void World::forceUpdateStep() {
     int nextForceBuffer = 1 - currentForceBuffer;
 
@@ -567,30 +535,6 @@ void World::forceUpdateStep() {
     swapForceBuffers();
 }
 
-// Phase 2: Temperature diffusion step
-void World::temperatureStep() {
-    int nextTempBuffer = 1 - currentTempBuffer;
-
-    // Bind temperature textures: read from current, write to next
-    glBindImageTexture(4, temperatureTextures[currentTempBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_R16F);
-    glBindImageTexture(5, temperatureTextures[nextTempBuffer], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_R16F);
-    // Also need state texture to know element types
-    glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
-
-    temperatureShader.use();
-    temperatureShader.setVec2("worldSize", static_cast<float>(worldWidth), static_cast<float>(worldHeight));
-    temperatureShader.setFloat("time", simulationTime);
-    temperatureShader.setFloat("ambientTemperature", simSettings.ambientTemperature);
-
-    GLuint workGroupsX = (worldWidth + 15) / 16;
-    GLuint workGroupsY = (worldHeight + 15) / 16;
-    glDispatchCompute(workGroupsX, workGroupsY, 1);
-
-    glMemoryBarrier(GL_SHADER_IMAGE_ACCESS_BARRIER_BIT);
-
-    swapTemperatureBuffers();
-}
-
 void World::simulationStep() {
     // Phase 1: Force update reads effectors from PREVIOUS simulation step
     gpuTimers[TIMER_FORCE_UPDATE].begin();
@@ -605,19 +549,12 @@ void World::simulationStep() {
     glBufferSubData(GL_SHADER_STORAGE_BUFFER, 0, sizeof(uint32_t), &zero);
     glBindBuffer(GL_SHADER_STORAGE_BUFFER, 0);
 
-    // Phase 2: Temperature diffusion runs BEFORE simulation
-    gpuTimers[TIMER_TEMPERATURE].begin();
-    temperatureStep();
-    gpuTimers[TIMER_TEMPERATURE].end();
-
     int nextBuffer = 1 - currentBuffer;
 
     glBindImageTexture(0, stateTextures[currentBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA8UI);
     glBindImageTexture(1, stateTextures[nextBuffer], 0, GL_FALSE, 0, GL_WRITE_ONLY, GL_RGBA8UI);
     glBindImageTexture(3, forceTextures[currentForceBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_RGBA16F);
 
-    // Phase 2: Bind temperature texture for simulation to read
-    glBindImageTexture(4, temperatureTextures[currentTempBuffer], 0, GL_FALSE, 0, GL_READ_ONLY, GL_R16F);
 
     // Phase 1: Bind effector SSBO for simulation to write effectors
     glBindBufferBase(GL_SHADER_STORAGE_BUFFER, 8, effectorSSBO);
@@ -777,7 +714,6 @@ void World::render(int screenX, int screenY, int screenWidth, int screenHeight,
         case DebugViewMode::Sky:           blitTexture = skyTexture;         viewModeInt = 0; break;
         case DebugViewMode::ForceField:    blitTexture = forceTextures[currentForceBuffer]; viewModeInt = 3; break;
         case DebugViewMode::RadianceField: blitTexture = radianceFieldTexture; viewModeInt = 2; break;
-        case DebugViewMode::Temperature:   blitTexture = temperatureTextures[currentTempBuffer]; viewModeInt = 4; break;
         default: break;
     }
 

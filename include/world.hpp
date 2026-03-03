@@ -51,11 +51,6 @@ struct SimulationSettings {
     // Chunk sleep system
     bool chunkSleepEnabled = true;
 
-    // Ambient temperature (changes with time of day)
-    float ambientTemperature = 20.0f;
-    float ambientTempOverride = 20.0f;  // Manual override from slider
-    bool useAutoAmbientTemp = true;     // Derive from time of day
-
     // Global entropy scalar for probabilistic reactions
     float globalEntropy = 1.0f;
 };
@@ -94,7 +89,6 @@ enum class DebugViewMode {
     Sky,           // Sky texture only
     ForceField,    // Force field visualization
     RadianceField, // Emitter + opacity G-buffer
-    Temperature,   // Temperature field visualization
     COUNT
 };
 
@@ -108,7 +102,6 @@ inline const char* debugViewModeName(DebugViewMode mode) {
         case DebugViewMode::Sky:           return "Sky";
         case DebugViewMode::ForceField:    return "Force Field";
         case DebugViewMode::RadianceField: return "Radiance Field";
-        case DebugViewMode::Temperature:   return "Temperature";
         default: return "Unknown";
     }
 }
@@ -167,7 +160,6 @@ enum GPUTimerIndex {
     TIMER_SIMULATION = 0,
     TIMER_FORCE_UPDATE,
     TIMER_CHUNK_BUILD,
-    TIMER_TEMPERATURE,    // Temperature diffusion pass
     TIMER_RENDER,
     TIMER_RC_EMITTERS,    // Radiance field extraction
     TIMER_RC_CASCADE,     // Cascade merge passes
@@ -182,7 +174,6 @@ inline const char* gpuTimerName(int idx) {
         case TIMER_SIMULATION:   return "Simulation";
         case TIMER_FORCE_UPDATE: return "Force Update";
         case TIMER_CHUNK_BUILD:  return "Chunk Build";
-        case TIMER_TEMPERATURE:  return "Temperature";
         case TIMER_RENDER:       return "Render";
         case TIMER_RC_EMITTERS:  return "RC Emitters";
         case TIMER_RC_CASCADE:   return "RC Cascade";
@@ -224,7 +215,6 @@ public:
     GLuint getCurrentTexture() const { return stateTextures[currentBuffer]; }
     GLuint getDisplayTexture() const { return displayTexture; }
     GLuint getCurrentForceTexture() const { return forceTextures[currentForceBuffer]; }
-    GLuint getCurrentTemperatureTexture() const { return temperatureTextures[currentTempBuffer]; }
 
     void wakeChunkAt(int worldX, int worldY);
 
@@ -267,11 +257,6 @@ private:
 
     // Effector List SSBO
     GLuint effectorSSBO = 0;
-
-    // Temperature System
-    GLuint temperatureTextures[2] = {0, 0};
-    int currentTempBuffer = 0;
-    Shader temperatureShader;
 
     // Chunk Sleep System
     int chunkGridWidth = 0;
@@ -329,10 +314,8 @@ private:
     void swapBuffers();
     void swapForceBuffers();
     void swapChunkGrids();
-    void swapTemperatureBuffers();
     void simulationStep();
     void forceUpdateStep();
-    void temperatureStep();
 
     // Chunk helpers
     void wakeAllChunks();
