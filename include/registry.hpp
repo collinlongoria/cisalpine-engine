@@ -8,6 +8,9 @@
 *
 * This software is released under the MIT License.
 * https://opensource.org/licenses/MIT
+*
+* MODIFIED: DSL Integration - Removed flammability, probability, maxLife from
+*           GPU struct (now handled by DSL scripts). Added DSL compiler.
 */
 
 #ifndef CISALPINE_REGISTRY_HPP
@@ -20,32 +23,32 @@
 #include <glm/glm.hpp>
 #include <glad/glad.h>
 
+#include "compiler.hpp"
+
 namespace cisalpine {
 
-// GPU struct
+// GPU struct - DSL cleanup: removed flammability, probability, maxLife
+// These are now handled by the DSL script system via custom data bits.
 struct GPUElementData {
     glm::vec4 color;            // 16 bytes (offset 0)
     int type;                   // 4 bytes  (offset 16)
     float density;              // 4 bytes  (offset 20)
     float viscosity;            // 4 bytes  (offset 24)
-    float probability;          // 4 bytes  (offset 28)
-    int flammability;           // 4 bytes  (offset 32)
-    int glow;                   // 4 bytes  (offset 36)
-    int maxLife;                // 4 bytes  (offset 40)
-    int gemstone;               // 4 bytes  (offset 44)
-    float lightRadius;          // 4 bytes  (offset 48)
-    float lightIntensity;       // 4 bytes  (offset 52)
-    float ior;                  // 4 bytes  (offset 56)
-    float opacity;              // 4 bytes  (offset 60)
-    float specularPower;        // 4 bytes  (offset 64)
-    int _pad1, _pad2, _pad3;    // 12 bytes (offset 68) - Padding for vec4 alignment
-    glm::vec4 transmissionTint; // 16 bytes (offset 80)
-    float baseHeight;           // 4 bytes  (offset 96)
-    float colorVariation;       // 4 bytes  (offset 100)
-    int animType;               // 4 bytes  (offset 104)
-    float mass;                 // 4 bytes  (offset 108)
+    int glow;                   // 4 bytes  (offset 28)
+    int gemstone;               // 4 bytes  (offset 32)
+    float lightRadius;          // 4 bytes  (offset 36)
+    float lightIntensity;       // 4 bytes  (offset 40)
+    float ior;                  // 4 bytes  (offset 44)
+    float opacity;              // 4 bytes  (offset 48)
+    float specularPower;        // 4 bytes  (offset 52)
+    int _pad1, _pad2;           // 8 bytes  (offset 56) - Padding for vec4 alignment
+    glm::vec4 transmissionTint; // 16 bytes (offset 64)
+    float baseHeight;           // 4 bytes  (offset 80)
+    float colorVariation;       // 4 bytes  (offset 84)
+    int animType;               // 4 bytes  (offset 88)
+    float mass;                 // 4 bytes  (offset 92)
 };
-static_assert(sizeof(GPUElementData) == 112, "GPUElementData must be 112 bytes for std430");
+static_assert(sizeof(GPUElementData) == 96, "GPUElementData must be 96 bytes for std430");
 
 class Registry {
 public:
@@ -53,6 +56,9 @@ public:
 
     // Generates #defines for shader
     std::string getShaderHeader() const;
+
+    // Gets the DSL-generated GLSL code for injection into simulation.comp
+    std::string getDSLShaderCode() const;
 
     // Binds the SSBO to binding point
     void bindSSBO(GLuint bindingPoint) const;
@@ -72,7 +78,11 @@ public:
     bool isHidden(int id) const;
 
     // Max life for brush initialization (255 for Fire, 0 for most elements)
+    // Note: Still needed for brush initialization even though maxLife is removed from GPU struct
     int getMaxLife(int id) const;
+
+    // Get the DSL compiler for custom data initialization
+    const DSLCompiler& getDSLCompiler() const { return dslCompiler; }
 
 private:
     std::vector<GPUElementData> gpuData;
@@ -80,7 +90,11 @@ private:
     std::map<std::string, int> nameToId;
     std::vector<bool> singleClickFlags; // CPU-side only, not on GPU
     std::vector<bool> hiddenFlags;      // CPU-side only, not on GPU
+    std::vector<int> maxLifeValues;     // CPU-side only (for brush init), removed from GPU
     GLuint ssbo = 0;
+
+    // DSL Compiler
+    DSLCompiler dslCompiler;
 
     int parseType(const std::string& typeStr);
     int parseAnimType(const std::string& animStr);

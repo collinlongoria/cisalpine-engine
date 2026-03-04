@@ -22,10 +22,6 @@
       1.0
     ],
     "density": 10,
-    "conductivity": 0.3,
-    "specificHeat": 0.8,
-    "highTempTransition": 1700.0,
-    "highTempElement": 4,
     "colorVariation": 0.1
   },
   "Stone": {
@@ -37,12 +33,9 @@
       1.0
     ],
     "density": 100,
-    "conductivity": 0.8,
-    "specificHeat": 0.8,
     "specularPower": 4.0,
-    "highTempTransition": 1200.0,
-    "highTempElement": 4,
-    "colorVariation": 0.1
+    "colorVariation": 0.1,
+    "script": "INTERACT Lava ROLL 1 TURN Lava"
   },
   "Water": {
     "type": "Liquid",
@@ -54,8 +47,6 @@
     ],
     "density": 5,
     "viscosity": 0.05,
-    "conductivity": 0.6,
-    "specificHeat": 4.2,
     "opacity": 0.15,
     "specularPower": 16.0,
     "transmissionTint": [
@@ -67,10 +58,7 @@
     "baseHeight": 0.3,
     "colorVariation": 0.08,
     "animType": "Liquid",
-    "highTempTransition": 100.0,
-    "highTempElement": 34,
-    "lowTempTransition": 0.0,
-    "lowTempElement": 33
+    "script": "INTERACT Fire ROLL 15 TURN Steam\nINTERACT Lava ROLL 15 TURN Steam"
   },
   "Lava": {
     "type": "Liquid",
@@ -83,8 +71,6 @@
     "density": 20,
     "viscosity": 0.8,
     "glow": true,
-    "baseTemperature": 1000.0,
-    "conductivity": 1.5,
     "opacity": 0.15,
     "specularPower": 16.0,
     "transmissionTint": [
@@ -96,8 +82,7 @@
     "baseHeight": 0.3,
     "colorVariation": 0.12,
     "animType": "Liquid",
-    "lowTempTransition": 200.0,
-    "lowTempElement": 11
+    "script": "INTERACT Water ROLL 80 TURN Obsidian TURN Steam\nMAKES HOT"
   },
   "Wood": {
     "type": "Static",
@@ -108,13 +93,8 @@
       1.0
     ],
     "density": 50,
-    "flammable": true,
-    "burnChance": 0.05,
-    "conductivity": 0.15,
-    "specificHeat": 1.7,
-    "highTempTransition": 300.0,
-    "highTempElement": 6,
-    "colorVariation": 0.1
+    "colorVariation": 0.1,
+    "script": "INTERACT Fire ROLL 5 TURN Fire\nINTERACT Lava ROLL 5 TURN Fire"
   },
   "Fire": {
     "type": "Gas",
@@ -127,8 +107,6 @@
     "density": -1,
     "life": 255,
     "glow": true,
-    "baseTemperature": 800.0,
-    "conductivity": 0.5,
     "opacity": 0.05,
     "transmissionTint": [
       1.0,
@@ -138,7 +116,8 @@
     ],
     "baseHeight": 0.1,
     "colorVariation": 0.15,
-    "animType": "Fire"
+    "animType": "Fire",
+    "script": "MAKES HOT"
   },
   "Smoke": {
     "type": "Gas",
@@ -150,8 +129,6 @@
     ],
     "density": -2,
     "life": 200,
-    "baseTemperature": 80.0,
-    "conductivity": 0.02,
     "opacity": 0.05,
     "transmissionTint": [
       0.8,
@@ -171,9 +148,8 @@
       1.0
     ],
     "density": 12,
-    "conductivity": 0.25,
-    "specificHeat": 0.9,
-    "colorVariation": 0.12
+    "colorVariation": 0.12,
+    "script": "INTERACT Seed TURN Grass\nINTERACT Grass ROLL 2 TURN Grass"
   },
   "Seed": {
     "type": "Granular",
@@ -184,10 +160,9 @@
       1.0
     ],
     "density": 8,
-    "flammable": true,
     "singleClick": true,
-    "specificHeat": 1.5,
-    "colorVariation": 0.1
+    "colorVariation": 0.1,
+    "script": "INTERACT Fire ROLL 30 TURN Fire\nINTERACT Lava ROLL 30 TURN Fire"
   },
   "Grass": {
     "type": "Granular",
@@ -198,11 +173,8 @@
       1.0
     ],
     "density": 12,
-    "flammable": true,
-    "burnChance": 0.3,
-    "conductivity": 0.12,
-    "specificHeat": 1.5,
-    "colorVariation": 0.12
+    "colorVariation": 0.12,
+    "script": "INTERACT Fire ROLL 30 TURN Dirt\nINTERACT Lava ROLL 30 TURN Dirt"
   },
   "Obsidian": {
     "type": "Static",
@@ -213,12 +185,8 @@
       1.0
     ],
     "density": 200,
-    "conductivity": 0.9,
-    "specificHeat": 0.8,
     "specularPower": 24.0,
-    "colorVariation": 0.06,
-    "highTempTransition": 1000.0,
-    "highTempElement": 4
+    "colorVariation": 0.06
   },
   "Plant": {
     "type": "Static",
@@ -229,12 +197,8 @@
       1.0
     ],
     "density": 3,
-    "flammable": true,
-    "burnChance": 0.4,
-    "specificHeat": 1.5,
-    "highTempTransition": 250.0,
-    "highTempElement": 6,
-    "colorVariation": 0.12
+    "colorVariation": 0.12,
+    "script": "INTERACT Fire ROLL 40 TURN Fire\nINTERACT Lava ROLL 40 TURN Fire"
   },
   "Sapling": {
     "type": "Granular",
@@ -246,7 +210,6 @@
     ],
     "density": 8,
     "singleClick": true,
-    "specificHeat": 1.5,
     "colorVariation": 0.1
   },
   "Light": {
@@ -261,8 +224,6 @@
     "glow": true,
     "lightRadius": 20,
     "lightIntensity": 1.5,
-    "baseTemperature": 60.0,
-    "conductivity": 0.05,
     "transmissionTint": [
       1.0,
       1.0,
@@ -283,8 +244,6 @@
     "glow": true,
     "lightRadius": 20,
     "lightIntensity": 1.5,
-    "baseTemperature": 60.0,
-    "conductivity": 0.05,
     "transmissionTint": [
       1.0,
       0.1,
@@ -305,8 +264,6 @@
     "glow": true,
     "lightRadius": 20,
     "lightIntensity": 1.5,
-    "baseTemperature": 60.0,
-    "conductivity": 0.05,
     "transmissionTint": [
       0.0,
       1.0,
@@ -327,8 +284,6 @@
     "glow": true,
     "lightRadius": 20,
     "lightIntensity": 1.5,
-    "baseTemperature": 60.0,
-    "conductivity": 0.05,
     "transmissionTint": [
       0.1,
       0.1,
@@ -349,8 +304,6 @@
     "glow": true,
     "lightRadius": 20,
     "lightIntensity": 1.5,
-    "baseTemperature": 60.0,
-    "conductivity": 0.05,
     "transmissionTint": [
       0.0,
       1.0,
@@ -371,8 +324,6 @@
     "glow": true,
     "lightRadius": 20,
     "lightIntensity": 1.5,
-    "baseTemperature": 60.0,
-    "conductivity": 0.05,
     "transmissionTint": [
       1.0,
       0.0,
@@ -393,8 +344,6 @@
     "glow": true,
     "lightRadius": 20,
     "lightIntensity": 1.5,
-    "baseTemperature": 60.0,
-    "conductivity": 0.05,
     "transmissionTint": [
       1.0,
       1.0,
@@ -415,8 +364,6 @@
     "glow": true,
     "lightRadius": 20,
     "lightIntensity": 1.5,
-    "baseTemperature": 60.0,
-    "conductivity": 0.05,
     "colorVariation": 0.0,
     "animType": "Rainbow"
   },
@@ -430,8 +377,6 @@
     ],
     "density": 14,
     "gemstone": true,
-    "conductivity": 0.7,
-    "specificHeat": 0.7,
     "opacity": 0.2,
     "specularPower": 64.0,
     "transmissionTint": [
@@ -448,19 +393,17 @@
     "color": [
       0.1,
       0.75,
-      0.3,
+      0.2,
       1.0
     ],
     "density": 14,
     "gemstone": true,
-    "conductivity": 0.7,
-    "specificHeat": 0.7,
     "opacity": 0.2,
     "specularPower": 64.0,
     "transmissionTint": [
       0.1,
       0.75,
-      0.3,
+      0.2,
       1.0
     ],
     "baseHeight": 0.85,
@@ -470,19 +413,17 @@
     "type": "Granular",
     "color": [
       0.85,
-      0.05,
+      0.1,
       0.15,
       1.0
     ],
     "density": 14,
     "gemstone": true,
-    "conductivity": 0.7,
-    "specificHeat": 0.7,
     "opacity": 0.2,
     "specularPower": 64.0,
     "transmissionTint": [
       0.85,
-      0.05,
+      0.1,
       0.15,
       1.0
     ],
@@ -499,8 +440,6 @@
     ],
     "density": 14,
     "gemstone": true,
-    "conductivity": 0.7,
-    "specificHeat": 0.7,
     "opacity": 0.2,
     "specularPower": 64.0,
     "transmissionTint": [
@@ -522,8 +461,6 @@
     ],
     "density": 14,
     "gemstone": true,
-    "conductivity": 0.7,
-    "specificHeat": 0.7,
     "opacity": 0.2,
     "specularPower": 64.0,
     "transmissionTint": [
@@ -545,7 +482,6 @@
     ],
     "density": 15,
     "singleClick": true,
-    "conductivity": 0.5,
     "specularPower": 2.0,
     "colorVariation": 0.05
   },
@@ -558,7 +494,6 @@
       0.3
     ],
     "density": 0,
-    "conductivity": 0.02,
     "opacity": 0.02,
     "baseHeight": 0.0,
     "colorVariation": 0.05
@@ -572,9 +507,6 @@
       1.0
     ],
     "density": 999,
-    "baseTemperature": -40.0,
-    "conductivity": 0.0,
-    "specificHeat": 99.0,
     "opacity": 0.95,
     "specularPower": 8.0,
     "transmissionTint": [
@@ -600,8 +532,6 @@
     "glow": true,
     "lightRadius": 12,
     "lightIntensity": 0.3,
-    "conductivity": 0.0,
-    "specificHeat": 99.0,
     "opacity": 1.0,
     "specularPower": 32.0,
     "transmissionTint": [
@@ -624,8 +554,6 @@
     "type": "Static",
     "density": 10.0,
     "hidden": true,
-    "conductivity": 0.15,
-    "specificHeat": 1.7,
     "colorVariation": 0.1
   },
   "LeafTip": {
@@ -638,7 +566,6 @@
     "type": "Static",
     "density": 10.0,
     "hidden": true,
-    "specificHeat": 1.5,
     "colorVariation": 0.12
   },
   "Ice": {
@@ -650,9 +577,6 @@
       0.9
     ],
     "density": 8,
-    "baseTemperature": -10.0,
-    "conductivity": 1.0,
-    "specificHeat": 2.1,
     "opacity": 0.25,
     "specularPower": 32.0,
     "transmissionTint": [
@@ -663,8 +587,7 @@
     ],
     "baseHeight": 0.9,
     "colorVariation": 0.06,
-    "highTempTransition": 5.0,
-    "highTempElement": 3
+    "script": "INTERACT Fire ROLL 80 TURN Water\nINTERACT Lava ROLL 80 TURN Water\nROLL 0 TURN Water"
   },
   "Steam": {
     "type": "Gas",
@@ -675,9 +598,7 @@
       0.35
     ],
     "density": -3,
-    "baseTemperature": 110.0,
-    "conductivity": 0.03,
-    "specificHeat": 2.0,
+    "life": 255,
     "opacity": 0.03,
     "transmissionTint": [
       0.9,
@@ -686,9 +607,7 @@
       1.0
     ],
     "baseHeight": 0.05,
-    "colorVariation": 0.06,
-    "lowTempTransition": 80.0,
-    "lowTempElement": 3
+    "colorVariation": 0.06
   },
   "Cloud": {
     "type": "Static",
@@ -700,9 +619,6 @@
     ],
     "density": -4,
     "life": 255,
-    "baseTemperature": 5.0,
-    "conductivity": 0.02,
-    "specificHeat": 2.0,
     "opacity": 0.1,
     "transmissionTint": [
       0.95,
@@ -724,9 +640,6 @@
     "density": 4,
     "viscosity": 0.02,
     "mass": 0.8,
-    "baseTemperature": -196.0,
-    "conductivity": 0.8,
-    "specificHeat": 2.0,
     "opacity": 0.1,
     "specularPower": 16.0,
     "transmissionTint": [
@@ -738,10 +651,7 @@
     "baseHeight": 0.3,
     "colorVariation": 0.08,
     "animType": "Liquid",
-    "highTempTransition": -195.0,
-    "highTempElement": 37,
-    "tempModifierType": 2,
-    "tempModifierRate": 40.0
+    "script": "ROLL 5 TURN N2Gas\nMAKES COLD"
   },
   "N2Gas": {
     "type": "Gas",
@@ -754,8 +664,6 @@
     "density": -3,
     "life": 150,
     "hidden": true,
-    "baseTemperature": -100.0,
-    "conductivity": 0.02,
     "opacity": 0.02,
     "transmissionTint": [
       0.8,
@@ -765,8 +673,7 @@
     ],
     "baseHeight": 0.05,
     "colorVariation": 0.05,
-    "tempModifierType": 2,
-    "tempModifierRate": 15.0
+    "script": "MAKES COLD"
   },
   "Thermite": {
     "type": "Granular",
@@ -777,13 +684,8 @@
       1.0
     ],
     "density": 18,
-    "flammable": true,
-    "burnChance": 0.01,
-    "conductivity": 0.4,
-    "specificHeat": 0.5,
     "colorVariation": 0.08,
-    "highTempTransition": 500.0,
-    "highTempElement": 39
+    "script": "INTERACT Fire TURN MoltenIron\nINTERACT Lava TURN MoltenIron"
   },
   "MoltenIron": {
     "type": "Liquid",
@@ -797,9 +699,6 @@
     "viscosity": 0.6,
     "glow": true,
     "hidden": true,
-    "baseTemperature": 1500.0,
-    "conductivity": 2.0,
-    "specificHeat": 0.5,
     "opacity": 0.15,
     "specularPower": 16.0,
     "transmissionTint": [
@@ -811,10 +710,7 @@
     "baseHeight": 0.3,
     "colorVariation": 0.1,
     "animType": "Liquid",
-    "tempModifierType": 1,
-    "tempModifierRate": 50.0,
-    "lowTempTransition": 400.0,
-    "lowTempElement": 11
+    "script": "INTERACT Water TURN Obsidian\nROLL 0 TURN Obsidian\nMAKES HOT"
   },
   "DryIce": {
     "type": "Granular",
@@ -825,9 +721,6 @@
       0.9
     ],
     "density": 10,
-    "baseTemperature": -78.0,
-    "conductivity": 0.6,
-    "specificHeat": 0.9,
     "opacity": 0.3,
     "specularPower": 16.0,
     "transmissionTint": [
@@ -838,10 +731,7 @@
     ],
     "baseHeight": 0.8,
     "colorVariation": 0.06,
-    "highTempTransition": -77.0,
-    "highTempElement": 41,
-    "tempModifierType": 2,
-    "tempModifierRate": 20.0
+    "script": "ROLL 2 TURN CO2Gas\nMAKES COLD"
   },
   "CO2Gas": {
     "type": "Gas",
@@ -854,9 +744,6 @@
     "density": -2,
     "life": 180,
     "hidden": true,
-    "baseTemperature": -50.0,
-    "conductivity": 0.02,
-    "specificHeat": 0.8,
     "opacity": 0.02,
     "transmissionTint": [
       0.9,
@@ -866,8 +753,7 @@
     ],
     "baseHeight": 0.05,
     "colorVariation": 0.04,
-    "tempModifierType": 2,
-    "tempModifierRate": 8.0
+    "script": "MAKES COLD"
   },
   "Fuser": {
     "type": "Static",
@@ -881,8 +767,6 @@
     "glow": true,
     "lightRadius": 6,
     "lightIntensity": 0.8,
-    "conductivity": 0.01,
-    "specificHeat": 99.0,
     "specularPower": 8.0,
     "transmissionTint": [
       1.0,
@@ -891,7 +775,8 @@
       1.0
     ],
     "colorVariation": 0.05,
-    "animType": "Fire"
+    "animType": "Fire",
+    "script": "MAKES HOT"
   },
   "HeavySand": {
     "type": "Granular",
@@ -903,8 +788,6 @@
     ],
     "density": 25,
     "mass": 5.0,
-    "conductivity": 0.4,
-    "specificHeat": 0.7,
     "specularPower": 2.0,
     "colorVariation": 0.08
   },
@@ -918,8 +801,6 @@
     ],
     "density": 1,
     "mass": 0.01,
-    "conductivity": 0.005,
-    "specificHeat": 1.0,
     "opacity": 0.1,
     "specularPower": 8.0,
     "transmissionTint": [

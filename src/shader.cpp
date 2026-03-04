@@ -125,7 +125,8 @@ bool Shader::loadFromFile(std::string_view vertexPath, std::string_view fragment
     return true;
 }
 
-bool Shader::loadCompute(std::string_view computePath, const std::string& header) {
+bool Shader::loadCompute(std::string_view computePath, const std::string& header,
+                         const std::string& dslCode) {
     std::string source = readFile(computePath);
     if (source.empty()) {
         return false;
@@ -145,6 +146,15 @@ bool Shader::loadCompute(std::string_view computePath, const std::string& header
     size_t versionPos = source.find("#version");
     if (versionPos != std::string::npos) insertHeaderAfterLine(versionPos);
     else source = header + "\n" + source;
+
+    // DSL Injection: Replace the DSL_INJECTION_POINT marker with generated code
+    if (!dslCode.empty()) {
+        const std::string marker = "// DSL_INJECTION_POINT";
+        size_t markerPos = source.find(marker);
+        if (markerPos != std::string::npos) {
+            source.replace(markerPos, marker.length(), dslCode);
+        }
+    }
 
     GLuint computeShader = compileShader(GL_COMPUTE_SHADER, source, computePath);
     if (computeShader == 0) return false;

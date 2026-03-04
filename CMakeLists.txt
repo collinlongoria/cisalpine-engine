@@ -53,7 +53,8 @@ add_executable(CisalpineEngine
         src/app.cpp
         src/world.cpp
         src/shader.cpp
-        src/registry.cpp)
+        src/registry.cpp
+        src/dsl_compiler.cpp)
 target_include_directories(CisalpineEngine PRIVATE include)
 target_link_libraries(CisalpineEngine PRIVATE glfw glad imgui stb glm nlohmann_json)
 

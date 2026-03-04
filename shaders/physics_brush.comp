@@ -9,22 +9,19 @@ struct ElementData {
     int type;                  // 16-19
     float density;             // 20-23
     float viscosity;           // 24-27
-    float probability;         // 28-31
-    int flammability;          // 32-35
-    int glow;                  // 36-39
-    int maxLife;               // 40-43
-    int gemstone;              // 44-47
-    float lightRadius;         // 48-51
-    float lightIntensity;      // 52-55
-    float ior;                 // 56-59
-    float opacity;             // 60-63
-    float specularPower;       // 64-67
-    int _pad1, _pad2, _pad3;   // 68-79
-    vec4 transmissionTint;     // 80-95
-    float baseHeight;          // 96-99
-    float colorVariation;      // 100-103
-    int animType;              // 104-107
-    float mass;                // 108-111
+    int glow;                  // 28-31
+    int gemstone;              // 32-35
+    float lightRadius;         // 36-39
+    float lightIntensity;      // 40-43
+    float ior;                 // 44-47
+    float opacity;             // 48-51
+    float specularPower;       // 52-55
+    int _pad1, _pad2;          // 56-63
+    vec4 transmissionTint;     // 64-79
+    float baseHeight;          // 80-83
+    float colorVariation;      // 84-87
+    int animType;              // 88-91
+    float mass;                // 92-95
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {

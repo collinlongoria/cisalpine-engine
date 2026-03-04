@@ -100,9 +100,12 @@ void App::init(int worldW, int worldH) {
     // Get shader header from registry
     std::string header = registry.getShaderHeader();
 
+    // Get DSL-generated GLSL code
+    std::string dslCode = registry.getDSLShaderCode();
+
     // Create world
     world = std::make_unique<World>(worldWidth, worldHeight);
-    if (!world->init(header)) {
+    if (!world->init(header, dslCode)) {
         throw std::runtime_error("Failed to initialize world");
     }
 

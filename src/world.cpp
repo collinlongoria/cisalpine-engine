@@ -50,7 +50,7 @@ World::~World() {
     }
 }
 
-bool World::init(const std::string& shaderHeader) {
+bool World::init(const std::string& shaderHeader, const std::string& dslCode) {
     // Build augmented shader header with chunk, RC, and effector constants
     std::string fullHeader = shaderHeader;
     fullHeader += "#define CHUNK_SIZE " + std::to_string(CHUNK_SIZE) + "\n";
@@ -63,7 +63,7 @@ bool World::init(const std::string& shaderHeader) {
     fullHeader += "\n";
 
     // Load shaders
-    if (!simulationShader.loadCompute("shaders/simulation.comp", fullHeader)) {
+    if (!simulationShader.loadCompute("shaders/simulation.comp", fullHeader, dslCode)) {
         std::cerr << "Failed to load simulation shader" << std::endl;
         return false;
     }

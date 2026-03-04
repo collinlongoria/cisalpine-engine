@@ -6,27 +6,25 @@ layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8ui, binding = 1) uniform writeonly uimage2D stateOut;
 layout(rgba16f, binding = 3) uniform readonly image2D forceField;
 
+// DSL Integration: Updated ElementData struct - removed flammability, probability, maxLife
 struct ElementData {
     vec4 color;                // 0-15
     int type;                  // 16-19
     float density;             // 20-23
     float viscosity;           // 24-27
-    float probability;         // 28-31
-    int flammability;          // 32-35
-    int glow;                  // 36-39
-    int maxLife;               // 40-43
-    int gemstone;              // 44-47
-    float lightRadius;         // 48-51
-    float lightIntensity;      // 52-55
-    float ior;                 // 56-59
-    float opacity;             // 60-63
-    float specularPower;       // 64-67
-    int _pad1, _pad2, _pad3;   // 68-79
-    vec4 transmissionTint;     // 80-95
-    float baseHeight;          // 96-99
-    float colorVariation;      // 100-103
-    int animType;              // 104-107
-    float mass;                // 108-111
+    int glow;                  // 28-31
+    int gemstone;              // 32-35
+    float lightRadius;         // 36-39
+    float lightIntensity;      // 40-43
+    float ior;                 // 44-47
+    float opacity;             // 48-51
+    float specularPower;       // 52-55
+    int _pad1, _pad2;          // 56-63
+    vec4 transmissionTint;     // 64-79
+    float baseHeight;          // 80-83
+    float colorVariation;      // 84-87
+    int animType;              // 88-91
+    float mass;                // 92-95
 };
 
 layout(std430, binding = 2) buffer ElementRegistry {
@@ -50,9 +48,9 @@ layout(std430, binding = 6) buffer ActiveChunkList {
 
 // Phase 1: Effector List SSBO for writing effectors
 struct Effector {
-    vec2 position;       // 8 bytes
-    uint type;           // 4 bytes (0 = Black Hole, 1 = Bomb)
-    float strength;      // 4 bytes
+    vec2 position;
+    uint type;
+    float strength;
 };
 
 layout(std430, binding = 8) buffer EffectorList {
@@ -62,6 +60,7 @@ layout(std430, binding = 8) buffer EffectorList {
     uint _eff_pad3;
     Effector effectors[];
 };
+
 uniform vec2  worldSize;
 uniform float time;
 uniform uint  frameCount;
@@ -77,7 +76,6 @@ const uint BOMB_FUSE_TICKS  = 250u;
 const float BOMB_DESTROY_RADIUS = 12.0;
 
 const int CHUNK_WAKE_MARGIN = 2;
-
 
 // Phase 1: Write an effector to the SSBO
 void emitEffector(vec2 position, uint type, float strength) {
@@ -102,41 +100,27 @@ void wakeChunk(ivec2 pixelPos) {
 
 void wakeChunkAndNeighbors(ivec2 pos) {
     wakeChunk(pos);
-
     if (!useChunkSleep) return;
 
     int localX = pos.x % CHUNK_SIZE;
     int localY = pos.y % CHUNK_SIZE;
 
-    // left edge
-    if (localX < CHUNK_WAKE_MARGIN) {
+    if (localX < CHUNK_WAKE_MARGIN)
         wakeChunk(pos + ivec2(-CHUNK_SIZE, 0));
-    }
-    // right edge
-    if (localX >= CHUNK_SIZE - CHUNK_WAKE_MARGIN) {
+    if (localX >= CHUNK_SIZE - CHUNK_WAKE_MARGIN)
         wakeChunk(pos + ivec2(CHUNK_SIZE, 0));
-    }
-    // bottom edge
-    if (localY < CHUNK_WAKE_MARGIN) {
+    if (localY < CHUNK_WAKE_MARGIN)
         wakeChunk(pos + ivec2(0, -CHUNK_SIZE));
-    }
-    // top edge
-    if (localY >= CHUNK_SIZE - CHUNK_WAKE_MARGIN) {
+    if (localY >= CHUNK_SIZE - CHUNK_WAKE_MARGIN)
         wakeChunk(pos + ivec2(0, CHUNK_SIZE));
-    }
-    // Corners
-    if (localX < CHUNK_WAKE_MARGIN && localY < CHUNK_WAKE_MARGIN) {
+    if (localX < CHUNK_WAKE_MARGIN && localY < CHUNK_WAKE_MARGIN)
         wakeChunk(pos + ivec2(-CHUNK_SIZE, -CHUNK_SIZE));
-    }
-    if (localX >= CHUNK_SIZE - CHUNK_WAKE_MARGIN && localY < CHUNK_WAKE_MARGIN) {
+    if (localX >= CHUNK_SIZE - CHUNK_WAKE_MARGIN && localY < CHUNK_WAKE_MARGIN)
         wakeChunk(pos + ivec2(CHUNK_SIZE, -CHUNK_SIZE));
-    }
-    if (localX < CHUNK_WAKE_MARGIN && localY >= CHUNK_SIZE - CHUNK_WAKE_MARGIN) {
+    if (localX < CHUNK_WAKE_MARGIN && localY >= CHUNK_SIZE - CHUNK_WAKE_MARGIN)
         wakeChunk(pos + ivec2(-CHUNK_SIZE, CHUNK_SIZE));
-    }
-    if (localX >= CHUNK_SIZE - CHUNK_WAKE_MARGIN && localY >= CHUNK_SIZE - CHUNK_WAKE_MARGIN) {
+    if (localX >= CHUNK_SIZE - CHUNK_WAKE_MARGIN && localY >= CHUNK_SIZE - CHUNK_WAKE_MARGIN)
         wakeChunk(pos + ivec2(CHUNK_SIZE, CHUNK_SIZE));
-    }
 }
 
 // Helpers
@@ -150,7 +134,6 @@ float random01(ivec2 pos) {
     return fract(sin(dot(vec2(pos) + time, vec2(12.9898, 78.233))) * 43758.5453);
 }
 
-// because one hash isnt enough :(
 float random01b(ivec2 pos) {
     return fract(sin(dot(vec2(pos) + time * 1.7, vec2(39.346, 11.135))) * 23421.6312);
 }
@@ -188,7 +171,6 @@ vec2 getForce(ivec2 pos) {
 }
 
 bool isDoomed(ivec2 pos) {
-    // Check surroundings for Void or BlackHole
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             if (dx == 0 && dy == 0) continue;
@@ -226,16 +208,8 @@ bool isImmobile(uint id) {
     return elements[id].type == TYPE_STATIC;
 }
 
-bool isFlammable(uint id) {
-    return id < MAX_ELEMENTS && elements[id].flammability == 1;
-}
-
 bool isGlowing(uint id) {
     return id < MAX_ELEMENTS && elements[id].glow == 1;
-}
-
-bool hasLife(uint id) {
-    return id < MAX_ELEMENTS && elements[id].maxLife > 0;
 }
 
 bool isIndestructible(uint id) {
@@ -248,7 +222,6 @@ bool canDisplace(uint mover, uint target) {
     if (target == EMPTY) return true;
     if (mover == target) return false;
     if (mover >= MAX_ELEMENTS || target >= MAX_ELEMENTS) return false;
-
     if (target == VOID || target == BLACKHOLE) return false;
 
     float dMover = elements[mover].density;
@@ -260,9 +233,6 @@ bool canDisplace(uint mover, uint target) {
     // Heavier things displace lighter fluids/gases
     if (dMover > dTarget && (isLiquid(target) || isGas(target))) return true;
 
-    // Lava/Fire burns flammable things
-    if ((mover == LAVA || mover == FIRE) && isFlammable(target)) return true;
-
     return false;
 }
 
@@ -271,7 +241,6 @@ bool canDisplace(uint mover, uint target) {
 ivec2 forceBasedDest(ivec2 src, uint elem, vec2 force) {
     float forceMag = length(force);
 
-    // Static elements need much stronger force to be moved
     float threshold = 0.5;
     float moveScale = 0.15;
     if (isStatic(elem) && elem != VOID && elem != BLACKHOLE) {
@@ -285,20 +254,16 @@ ivec2 forceBasedDest(ivec2 src, uint elem, vec2 force) {
 
     if (forceMag < threshold) return ivec2(-1);
 
-    // Normalize direction
     vec2 dir = force / forceMag;
 
-    // Scales probability of force-based movement with magnitude
     float moveChance = clamp((forceMag - threshold) * moveScale, 0.0, 0.95);
     float roll = float(hash3u(uvec2(src), frameCount * 7u + 31u) & 0xFFFFu) / 65535.0;
     if (roll > moveChance) return ivec2(-1);
 
     int bestDx = int(round(dir.x));
     int bestDy = int(round(dir.y));
-
     bestDx = clamp(bestDx, -1, 1);
     bestDy = clamp(bestDy, -1, 1);
-
     if (bestDx == 0 && bestDy == 0) return ivec2(-1);
 
     ivec2 primary = src + ivec2(bestDx, bestDy);
@@ -309,12 +274,9 @@ ivec2 forceBasedDest(ivec2 src, uint elem, vec2 force) {
 
         if (forceMag > threshold * 2.0 && targetElem != VOID && targetElem != BLACKHOLE) {
             if (targetElem != elem) {
-                // Only force-push into fluids/gases or lighter elements
                 bool targetIsFluid = isLiquid(targetElem) || isGas(targetElem);
                 bool densityAdv = (elements[elem].density > elements[targetElem].density);
-                if (targetIsFluid || densityAdv) {
-                    return primary;
-                }
+                if (targetIsFluid || densityAdv) return primary;
             }
         }
         if (canDisplace(elem, targetElem)) return primary;
@@ -323,12 +285,10 @@ ivec2 forceBasedDest(ivec2 src, uint elem, vec2 force) {
     ivec2 alt1 = src + ivec2(bestDx, 0);
     ivec2 alt2 = src + ivec2(0, bestDy);
 
-    if (bestDx != 0 && inBounds(alt1) && canDisplace(elem, getElement(alt1))) {
+    if (bestDx != 0 && inBounds(alt1) && canDisplace(elem, getElement(alt1)))
         return alt1;
-    }
-    if (bestDy != 0 && inBounds(alt2) && canDisplace(elem, getElement(alt2))) {
+    if (bestDy != 0 && inBounds(alt2) && canDisplace(elem, getElement(alt2)))
         return alt2;
-    }
 
     return ivec2(-1);
 }
@@ -354,14 +314,11 @@ ivec2 desiredDest(ivec2 src, uint elem) {
 
     bool leftFirst = (hash2u(uvec2(src) ^ uvec2(frameCount)) & 1u) == 0u;
 
-    // element drift
     if (type == TYPE_GRANULAR) {
         float density = elements[elem].density;
         float elemMass = elements[elem].mass;
 
-        // Only apply drift to elements that are actively falling
         if (canDisplace(elem, getElement(down))) {
-            // Mass-based drift: low mass = more horizontal scatter
             float driftChance = clamp(3.0 / max(density, 0.5), 0.02, 0.5);
             driftChance *= clamp(1.0 / max(elemMass, 0.01), 0.5, 10.0);
             driftChance = clamp(driftChance, 0.02, 0.95);
@@ -371,8 +328,7 @@ ivec2 desiredDest(ivec2 src, uint elem) {
                 if (leftFirst) {
                     if (canDisplace(elem, getElement(downL))) return downL;
                     if (canDisplace(elem, getElement(downR))) return downR;
-                }
-                else {
+                } else {
                     if (canDisplace(elem, getElement(downR))) return downR;
                     if (canDisplace(elem, getElement(downL))) return downL;
                 }
@@ -382,17 +338,13 @@ ivec2 desiredDest(ivec2 src, uint elem) {
         if (leftFirst) {
             if (canDisplace(elem, getElement(downL))) return downL;
             if (canDisplace(elem, getElement(downR))) return downR;
-        }
-        else {
+        } else {
             if (canDisplace(elem, getElement(downR))) return downR;
             if (canDisplace(elem, getElement(downL))) return downL;
         }
     }
-    // LIQUID
     else if (type == TYPE_LIQUID) {
         if (canDisplace(elem, getElement(down))) return down;
-
-        // Viscosity check
         if (random01(src) < elements[elem].viscosity) return src;
 
         if (leftFirst) {
@@ -400,15 +352,13 @@ ivec2 desiredDest(ivec2 src, uint elem) {
             if (canDisplace(elem, getElement(downR))) return downR;
             if (canDisplace(elem, getElement(left))) return left;
             if (canDisplace(elem, getElement(right))) return right;
-        }
-        else {
+        } else {
             if (canDisplace(elem, getElement(downR))) return downR;
             if (canDisplace(elem, getElement(downL))) return downL;
             if (canDisplace(elem, getElement(right))) return right;
             if (canDisplace(elem, getElement(left))) return left;
         }
     }
-    // GAS
     else if (type == TYPE_GAS) {
         if (getElement(up) == EMPTY) return up;
         if (leftFirst) {
@@ -416,8 +366,7 @@ ivec2 desiredDest(ivec2 src, uint elem) {
             if (getElement(upR) == EMPTY) return upR;
             if (getElement(left) == EMPTY) return left;
             if (getElement(right) == EMPTY) return right;
-        }
-        else {
+        } else {
             if (getElement(upR) == EMPTY) return upR;
             if (getElement(upL) == EMPTY) return upL;
             if (getElement(right) == EMPTY) return right;
@@ -430,10 +379,8 @@ ivec2 desiredDest(ivec2 src, uint elem) {
 
 bool sourceProposesTo(ivec2 src, ivec2 dest) {
     if (!inBounds(src)) return false;
-
     if (isDoomed(src)) return false;
 
-    // Don't allow proposals to move into a growing sapling
     if (inBounds(dest)) {
         uvec4 destState = getState(dest);
         if (destState.r == SAPLING && destState.b > 0u) return false;
@@ -441,17 +388,14 @@ bool sourceProposesTo(ivec2 src, ivec2 dest) {
 
     uint e = getElement(src);
     if (e == EMPTY) return false;
-
     if (e == VOID || e == BLACKHOLE) return false;
 
     ivec2 d = desiredDest(src, e);
     if (d != dest) return false;
 
-    // Check if displacement is valid
     uint destElem = getElement(dest);
     if (canDisplace(e, destElem)) return true;
 
-    // Force override: strong force can push into occupied cells (with density check)
     if (destElem != VOID && destElem != BLACKHOLE && destElem != e) {
         vec2 force = getForce(src);
         if (length(force) > 5.0) {
@@ -469,7 +413,6 @@ ivec2 pickWinnerForDest(ivec2 dest) {
     uint bestScore = 0u;
     bool found = false;
 
-    // Check neighbors
     for (int oy = -1; oy <= 1; ++oy) {
         for (int ox = -1; ox <= 1; ++ox) {
             if (ox == 0 && oy == 0) continue;
@@ -501,7 +444,6 @@ bool isTouchingSoil(ivec2 pos) {
     return false;
 }
 
-// Check if this EMPTY cell should become a WOODTIP by pulling from a neighbor
 bool tryPullWoodTip(ivec2 pos, out uvec4 newState) {
     ivec2 below = pos + ivec2(0, -1);
     if (!inBounds(below)) return false;
@@ -511,24 +453,18 @@ bool tryPullWoodTip(ivec2 pos, out uvec4 newState) {
     if (belowState.r == WOODTIP) {
         uint energy = belowState.g;
         uint branchSeed = belowState.b;
-
         if (energy > 0u) {
-            // Continue growing upward; become the new tip
             newState = uvec4(WOODTIP, energy - 1u, branchSeed, 0u);
             return true;
         } else {
-            // become a leaf tip to start canopy
             newState = uvec4(LEAFTIP, 8u, branchSeed, 0u);
             return true;
         }
     }
 
-    // Pull from SAPLING that just initialized
     if (belowState.r == SAPLING && belowState.b >= 1u) {
         uint targetHeight = belowState.g;
         uint growthStep = belowState.b;
-
-        // Only the cell directly above the sapling pulls
         if (growthStep == 1u) {
             uint seed = hash2u(uvec2(below));
             newState = uvec4(WOODTIP, targetHeight - 1u, seed & 0xFFu, 0u);
@@ -539,9 +475,7 @@ bool tryPullWoodTip(ivec2 pos, out uvec4 newState) {
     return false;
 }
 
-// Check if this EMPTY cell should become a branch WOODTIP or LEAFTIP
 bool tryPullBranch(ivec2 pos, out uvec4 newState) {
-    // Check diagonal-below neighbors for branching tips
     for (int dx = -1; dx <= 1; dx += 2) {
         ivec2 diagBelow = pos + ivec2(dx, -1);
         if (!inBounds(diagBelow)) continue;
@@ -552,11 +486,9 @@ bool tryPullBranch(ivec2 pos, out uvec4 newState) {
         uint energy = nState.g;
         uint branchSeed = nState.b;
 
-        // Roll for branch chance
         float branchRoll = float(hash3u(uvec2(diagBelow), frameCount * 37u + uint(dx)) & 0xFFFFu) / 65535.0;
 
-        // Branch more in the middle of growth
-        float energyRatio = float(energy) / 25.0; // normalized rough estimate
+        float energyRatio = float(energy) / 25.0;
         float branchChance = 0.0;
         if (energyRatio > 0.15 && energyRatio < 0.85) {
             float midFactor = 1.0 - abs(energyRatio - 0.5) * 2.5;
@@ -564,19 +496,15 @@ bool tryPullBranch(ivec2 pos, out uvec4 newState) {
         }
 
         if (branchRoll < branchChance && energy > 3u) {
-            // Start a branch
             uint branchLen = 2u + (hash3u(uvec2(pos), frameCount + 99u) % 3u);
             newState = uvec4(LEAFTIP, branchLen, branchSeed ^ uint(dx + 2), 0u);
             return true;
         }
     }
-
     return false;
 }
 
-// Check if this EMPTY cell should pull a LEAFTIP from a neighbor
 bool tryPullLeafTip(ivec2 pos, out uvec4 newState) {
-    // Leaf tips spread outward and upward
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             if (dx == 0 && dy == 0) continue;
@@ -588,14 +516,9 @@ bool tryPullLeafTip(ivec2 pos, out uvec4 newState) {
 
             uint energy = nState.g;
             uint dirSeed = nState.b;
-
             if (energy == 0u) continue;
 
-            // Leaf tips prefer to spread outward/upward
-            // Use dirSeed to determine preferred direction
             float spreadRoll = float(hash3u(uvec2(pos), frameCount * 71u + uint(dx * 3 + dy)) & 0xFFFFu) / 65535.0;
-
-            // Higher spread chance for upward/sideways, lower for downward
             float spreadChance = (dy >= 0) ? 0.35 : 0.10;
 
             if (spreadRoll < spreadChance) {
@@ -604,15 +527,20 @@ bool tryPullLeafTip(ivec2 pos, out uvec4 newState) {
             }
         }
     }
-
     return false;
 }
+
+// ======================================================================
+// DSL INJECTION POINT
+// The C++ DSL compiler generates executeCustomBehaviors() and helper
+// functions which are injected here by the shader loader.
+// ======================================================================
+// DSL_INJECTION_POINT
 
 void main() {
     ivec2 pos;
 
     if (useChunkSleep) {
-        // Derive pixel position from the active chunk list
         uint chunkId = active_chunk_ids[gl_WorkGroupID.x];
         ivec2 chunkCoord = ivec2(int(chunkId % CHUNK_GRID_W), int(chunkId / CHUNK_GRID_W));
         pos = chunkCoord * CHUNK_SIZE + ivec2(gl_LocalInvocationID.xy);
@@ -622,32 +550,29 @@ void main() {
 
     if (!inBounds(pos)) return;
 
-    // Pre-load current state for displacement protection checks
     uvec4 cur = getState(pos);
     uint elem = cur.r;
     uint life = cur.g;
 
-    // Check if anything is moving into us.
-    bool isAnchored = (elem == SAPLING && cur.b > 0u); // Growing sapling
+    // Check if anything is moving into us
+    bool isAnchored = (elem == SAPLING && cur.b > 0u);
 
     ivec2 winner = pickWinnerForDest(pos);
     if (winner.x != 999999 && !isAnchored) {
         uvec4 winState = getState(winner);
         imageStore(stateOut, pos, winState);
-        // Something moved here - wake this chunk for next frame
         wakeChunkAndNeighbors(pos);
-        return; // We have been overwritten. Stop.
+        return;
     }
 
-    // Boundary sentinel check
     if (elem >= MAX_ELEMENTS) {
         imageStore(stateOut, pos, cur);
         return;
     }
 
-    // Phase 1: BLACK HOLE emits effector for scatter-based physics
+    // Phase 1: BLACK HOLE emits effector
     if (elem == BLACKHOLE) {
-        emitEffector(vec2(pos), 0u, 8.0); // type 0 = Black Hole
+        emitEffector(vec2(pos), 0u, 8.0);
     }
 
     // VOID: Destroy anything touching it
@@ -656,22 +581,7 @@ void main() {
             for (int dx = -1; dx <= 1; dx++) {
                 if (dx == 0 && dy == 0) continue;
                 uint neighbor = getElement(pos + ivec2(dx, dy));
-                if (neighbor == VOID) {
-                    imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
-                    wakeChunkAndNeighbors(pos);
-                    return;
-                }
-            }
-        }
-    }
-
-    // BLACK HOLE: Destroy anything touching it
-    if (elem != VOID && elem != BLACKHOLE && elem != EMPTY) {
-        for (int dy = -1; dy <= 1; dy++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                if (dx == 0 && dy == 0) continue;
-                uint neighbor = getElement(pos + ivec2(dx, dy));
-                if (neighbor == BLACKHOLE) {
+                if (neighbor == VOID || neighbor == BLACKHOLE) {
                     imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
                     wakeChunkAndNeighbors(pos);
                     return;
@@ -685,28 +595,20 @@ void main() {
         uint fuse = cur.g;
         uint flags = cur.b;
 
-        // If this is the detonation frame (B=255), turn into fire + smoke
         if (flags == 255u) {
-            // Phase 1: Emit bomb effector for scatter-based physics
-            emitEffector(vec2(pos), 1u, 15.0); // type 1 = Bomb
-
-            // Bomb center becomes fire
+            emitEffector(vec2(pos), 1u, 15.0);
             imageStore(stateOut, pos, uvec4(FIRE, 255u, 0u, 0u));
             wakeChunkAndNeighbors(pos);
             return;
         }
 
-        // Check if bomb has landed
         ivec2 below = pos + ivec2(0, -1);
         bool resting = !inBounds(below) || !canDisplace(elem, getElement(below));
 
         if (resting) {
             fuse++;
-
             if (fuse >= BOMB_FUSE_TICKS) {
-                int destroyR = int(BOMB_DESTROY_RADIUS);
                 imageStore(stateOut, pos, uvec4(BOMB, 0u, 255u, 0u));
-                // Wake a large area for the explosion
                 for (int wdy = -1; wdy <= 1; wdy++) {
                     for (int wdx = -1; wdx <= 1; wdx++) {
                         wakeChunk(pos + ivec2(wdx * CHUNK_SIZE, wdy * CHUNK_SIZE));
@@ -714,7 +616,6 @@ void main() {
                 }
                 return;
             }
-
             imageStore(stateOut, pos, uvec4(BOMB, fuse, 0u, 0u));
             wakeChunkAndNeighbors(pos);
             return;
@@ -732,21 +633,14 @@ void main() {
                 if (sState.r == BOMB && sState.b == 255u) {
                     float dist = length(vec2(dx, dy));
                     if (dist <= BOMB_DESTROY_RADIUS) {
-                        // Close things get destroyed, farther out is chance based
                         float destroyChance = 1.0 - (dist / BOMB_DESTROY_RADIUS);
                         destroyChance = destroyChance * destroyChance;
                         float roll = float(hash3u(uvec2(pos), frameCount + 777u) & 0xFFFFu) / 65535.0;
                         if (roll < destroyChance) {
-                            if (isFlammable(elem)) {
-                                imageStore(stateOut, pos, uvec4(FIRE, 255u, 0u, 0u));
-                            }
-                            else {
-                                if (dist < BOMB_DESTROY_RADIUS * 0.4) {
-                                    imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
-                                }
-                                else {
-                                    imageStore(stateOut, pos, uvec4(SMOKE, 180u, 0u, 0u));
-                                }
+                            if (dist < BOMB_DESTROY_RADIUS * 0.4) {
+                                imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                            } else {
+                                imageStore(stateOut, pos, uvec4(SMOKE, 180u, 0u, 0u));
                             }
                             wakeChunkAndNeighbors(pos);
                             return;
@@ -757,180 +651,22 @@ void main() {
         }
     }
 
-   // === MIGRATED HARDCODED INTERACTIONS ===
-       if (elem != EMPTY && elem < MAX_ELEMENTS) {
-           bool touchingFire = false;
-           bool touchingWater = false;
-           int steamCount = 0;
+    // === DSL CUSTOM BEHAVIORS ===
+    // Execute data-driven element interactions compiled from scripts
+    if (elem != EMPTY && elem < MAX_ELEMENTS) {
+        uint customData = cur.b; // B channel = custom DSL state
+        uvec4 dslState = cur;
+        executeCustomBehaviors(pos, dslState, customData);
 
-           // Scan neighbors once
-           for (int dy = -1; dy <= 1; dy++) {
-               for (int dx = -1; dx <= 1; dx++) {
-                   if (dx == 0 && dy == 0) continue;
-                   ivec2 np = pos + ivec2(dx, dy);
-                   if (!inBounds(np)) continue;
-
-                   uint nElem = getElement(np);
-                   if (nElem == FIRE || nElem == LAVA) touchingFire = true;
-                   if (nElem == WATER) touchingWater = true;
-                   if (nElem == STEAM || nElem == CLOUD) steamCount++;
-               }
-           }
-
-           float roll = float(hash3u(uvec2(pos), frameCount * 13u + 7u) & 0xFFFFu) / 65535.0;
-
-           // Phase Changes
-           if (elem == ICE) {
-               if (touchingFire || roll < 0.002 * globalEntropy) { // Melts near fire or slowly at ambient
-                   imageStore(stateOut, pos, uvec4(WATER, 0u, 0u, 0u));
-                   wakeChunkAndNeighbors(pos); return;
-               }
-           }
-           else if (elem == WATER && touchingFire) {
-               if (roll < 0.15) { // Boils to steam
-                   imageStore(stateOut, pos, uvec4(STEAM, 255u, 0u, 0u));
-                   wakeChunkAndNeighbors(pos); return;
-               }
-           }
-           else if (elem == LAVA && touchingWater) {
-               if (roll < 0.8) { // Cools to obsidian
-                   imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0u, 0u));
-                   wakeChunkAndNeighbors(pos); return;
-               }
-           }
-           else if (elem == THERMITE && touchingFire) { // Ignites to molten iron
-               imageStore(stateOut, pos, uvec4(MOLTENIRON, 0u, 0u, 0u));
-               wakeChunkAndNeighbors(pos); return;
-           }
-           else if (elem == MOLTENIRON) { // Cools to obsidian
-               if (touchingWater || roll < 0.005) {
-                   imageStore(stateOut, pos, uvec4(OBSIDIAN, 0u, 0u, 0u));
-                   wakeChunkAndNeighbors(pos); return;
-               }
-           }
-           else if (elem == LIQUIDNITROGEN) { // Boils to N2
-               if (roll < 0.05 * globalEntropy) {
-                   imageStore(stateOut, pos, uvec4(N2GAS, 150u, 0u, 0u));
-                   wakeChunkAndNeighbors(pos); return;
-               }
-           }
-           else if (elem == DRYICE) { // Sublimates to CO2
-               if (roll < 0.02 * globalEntropy) {
-                   imageStore(stateOut, pos, uvec4(CO2GAS, 180u, 0u, 0u));
-                   wakeChunkAndNeighbors(pos); return;
-               }
-           }
-           else if (elem == STEAM) { // Condenses to cloud
-               if (steamCount >= 6 && roll < 0.08 * globalEntropy) {
-                   imageStore(stateOut, pos, uvec4(CLOUD, 255u, 0, 0));
-                   wakeChunkAndNeighbors(pos); return;
-               }
-               wakeChunkAndNeighbors(pos); // Keep awake
-           }
-           else if (elem == CLOUD) { // Cloud decay & rain (Kept from original logic)
-               ivec2 below = pos + ivec2(0, -1);
-               if (inBounds(below) && getElement(below) == EMPTY) {
-                   float rainChance = 0.008 * globalEntropy;
-                   if (roll < rainChance && life > 10u) cur.g = life - 5u;
-               }
-               uint cloudDecay = 1u;
-               uint randDecay = hash3u(uvec2(pos), frameCount * 41u) % 3u;
-               if (randDecay == 0u) {
-                   if (life <= cloudDecay) {
-                       imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
-                       wakeChunkAndNeighbors(pos); return;
-                   }
-                   cur.g = life - cloudDecay;
-               }
-               wakeChunkAndNeighbors(pos);
-           }
-           else if (elem == FUSER) { // Fuser melts/burns neighbors
-               for (int dy = -1; dy <= 1; dy++) {
-                   for (int dx = -1; dx <= 1; dx++) {
-                       ivec2 np = pos + ivec2(dx, dy);
-                       if (!inBounds(np)) continue;
-                       uint nElem = getElement(np);
-                       if (nElem == SAND || nElem == STONE || nElem == OBSIDIAN) {
-                           if (random01(np) < 0.05) {
-                               imageStore(stateOut, np, uvec4(LAVA, 0u, 0u, 0u));
-                               wakeChunkAndNeighbors(np);
-                           }
-                       } else if (isFlammable(nElem)) {
-                           if (random01(np) < 0.1) {
-                               imageStore(stateOut, np, uvec4(FIRE, 255u, 0u, 0u));
-                               wakeChunkAndNeighbors(np);
-                           }
-                       }
-                   }
-               }
-               wakeChunkAndNeighbors(pos);
-           }
-       }
-
-    // REACTION LOGIC
-    // (Contact reactions removed - now handled by data-driven thermal system)
-    // SMOKE DECAY
-    if (elem == SMOKE) {
-        if (life == 0u) {
-            imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+        // Check if DSL changed the state
+        if (dslState.r != cur.r || dslState.g != cur.g) {
+            // Element changed - write new state with life from DSL
+            imageStore(stateOut, pos, uvec4(dslState.r, dslState.g, customData, 0u));
             wakeChunkAndNeighbors(pos);
             return;
         }
-        uint baseDecay = 3u;
-        uint randDecay = hash3u(uvec2(pos), frameCount) % 5u;
-        uint totalDecay = baseDecay + randDecay;
-
-        if (life <= totalDecay) {
-            imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
-            wakeChunkAndNeighbors(pos);
-            return;
-        }
-        cur.g = life - totalDecay;
-        // Smoke is decaying, stay awake
-        wakeChunkAndNeighbors(pos);
-    }
-
-    // Generic Life Decay
-    if (elem != SMOKE && elem != BOMB && hasLife(elem) && life > 0u) {
-        uint decayRate = 4u;
-        if (life <= decayRate) {
-            uint deathElem;
-            uint deathLife;
-            if (elem == FIRE) {
-                deathElem = SMOKE;
-                deathLife = 180u + (hash3u(uvec2(pos), frameCount) % 40u);
-            }
-            else {
-                deathElem = EMPTY;
-                deathLife = 0u;
-            }
-            imageStore(stateOut, pos, uvec4(deathElem, deathLife, 0, 0));
-            wakeChunkAndNeighbors(pos);
-            return;
-        }
-        cur.g = life - decayRate;
-        wakeChunkAndNeighbors(pos);
-    }
-
-    // FLAMMABILITY
-    if (isFlammable(elem)) {
-        bool touchingFire = false;
-        for(int dy = -1; dy <= 1; dy++) {
-            for(int dx = -1; dx <= 1; dx++) {
-                uint n = getElement(pos + ivec2(dx, dy));
-                if (n == FIRE || n == LAVA) touchingFire = true;
-            }
-        }
-        if (touchingFire && random01(pos) < elements[elem].probability) {
-            if (elem == GRASS) {
-                imageStore(stateOut, pos, uvec4(DIRT, 0u, 0u, 0u));
-            }
-            else {
-                imageStore(stateOut, pos, uvec4(FIRE, 255u, 0, 0));
-            }
-            wakeChunkAndNeighbors(pos);
-            return;
-        }
+        // Write back potentially updated custom data
+        cur.b = customData;
     }
 
     // SEED -> GRASS Logic
@@ -1004,7 +740,6 @@ void main() {
         uint growthStep = cur.b;
 
         if (growthStep == 0u) {
-            // Initialize growth.
             if (isTouchingSoil(pos)) {
                 uint treeHeight = hash2u(uvec2(pos)) % 14u + 12u;
                 imageStore(stateOut, pos, uvec4(SAPLING, treeHeight, 1u, 0u));
@@ -1013,7 +748,6 @@ void main() {
             }
         }
         else {
-            // Check if there's still a tip directly above
             ivec2 above = pos + ivec2(0, 1);
             uvec4 aboveState = getState(above);
 
@@ -1021,8 +755,6 @@ void main() {
                 imageStore(stateOut, pos, uvec4(WOOD, 0u, 0u, 0u));
                 return;
             }
-
-            // Keep waiting
             imageStore(stateOut, pos, cur);
             wakeChunkAndNeighbors(pos);
             return;
@@ -1045,7 +777,7 @@ void main() {
 
     // EMPTY CELL
     if (elem == EMPTY) {
-        // Cloud rain: check if there's a cloud above that wants to rain
+        // Cloud rain
         ivec2 above = pos + ivec2(0, 1);
         if (inBounds(above)) {
             uvec4 aboveState = getState(above);
@@ -1080,51 +812,138 @@ void main() {
         }
     }
 
-    // MOVEMENT
+    // Steam condensation into Cloud (kept from original - complex neighbor counting)
+    if (elem == STEAM) {
+        int steamCount = 0;
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                if (dx == 0 && dy == 0) continue;
+                ivec2 np = pos + ivec2(dx, dy);
+                if (!inBounds(np)) continue;
+                uint nElem = getElement(np);
+                if (nElem == STEAM || nElem == CLOUD) steamCount++;
+            }
+        }
+        float roll = float(hash3u(uvec2(pos), frameCount * 13u + 7u) & 0xFFFFu) / 65535.0;
+        if (steamCount >= 6 && roll < 0.08 * globalEntropy) {
+            imageStore(stateOut, pos, uvec4(CLOUD, 255u, 0, 0));
+            wakeChunkAndNeighbors(pos);
+            return;
+        }
+        wakeChunkAndNeighbors(pos);
+    }
 
-    // Otherwise, try to move
+    // Cloud decay & rain
+    if (elem == CLOUD) {
+        float roll = float(hash3u(uvec2(pos), frameCount * 13u + 7u) & 0xFFFFu) / 65535.0;
+        ivec2 below = pos + ivec2(0, -1);
+        if (inBounds(below) && getElement(below) == EMPTY) {
+            float rainChance = 0.008 * globalEntropy;
+            if (roll < rainChance && life > 10u) cur.g = life - 5u;
+        }
+        uint cloudDecay = 1u;
+        uint randDecay = hash3u(uvec2(pos), frameCount * 41u) % 3u;
+        if (randDecay == 0u) {
+            if (life <= cloudDecay) {
+                imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+                wakeChunkAndNeighbors(pos);
+                return;
+            }
+            cur.g = life - cloudDecay;
+        }
+        wakeChunkAndNeighbors(pos);
+    }
+
+    // Fuser: melts/burns neighbors (kept from original - writes to neighbor cells)
+    if (elem == FUSER) {
+        for (int dy = -1; dy <= 1; dy++) {
+            for (int dx = -1; dx <= 1; dx++) {
+                ivec2 np = pos + ivec2(dx, dy);
+                if (!inBounds(np)) continue;
+                uint nElem = getElement(np);
+                if (nElem == SAND || nElem == STONE || nElem == OBSIDIAN) {
+                    if (random01(np) < 0.05) {
+                        imageStore(stateOut, np, uvec4(LAVA, 0u, 0u, 0u));
+                        wakeChunkAndNeighbors(np);
+                    }
+                }
+            }
+        }
+        wakeChunkAndNeighbors(pos);
+    }
+
+    // SMOKE DECAY
+    if (elem == SMOKE) {
+        if (life == 0u) {
+            imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+            wakeChunkAndNeighbors(pos);
+            return;
+        }
+        uint baseDecay = 3u;
+        uint randDecay = hash3u(uvec2(pos), frameCount) % 5u;
+        uint totalDecay = baseDecay + randDecay;
+
+        if (life <= totalDecay) {
+            imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
+            wakeChunkAndNeighbors(pos);
+            return;
+        }
+        cur.g = life - totalDecay;
+        wakeChunkAndNeighbors(pos);
+    }
+
+    // Generic Life Decay (Fire death -> Smoke, others -> Empty)
+    if (elem != SMOKE && elem != BOMB && life > 0u) {
+        uint decayRate = 4u;
+        if (life <= decayRate) {
+            uint deathElem;
+            uint deathLife;
+            if (elem == FIRE) {
+                deathElem = SMOKE;
+                deathLife = 180u + (hash3u(uvec2(pos), frameCount) % 40u);
+            } else {
+                deathElem = EMPTY;
+                deathLife = 0u;
+            }
+            imageStore(stateOut, pos, uvec4(deathElem, deathLife, 0, 0));
+            wakeChunkAndNeighbors(pos);
+            return;
+        }
+        cur.g = life - decayRate;
+        wakeChunkAndNeighbors(pos);
+    }
+
+    // MOVEMENT
     if (!isEmpty(elem) && (elem != VOID && elem != BLACKHOLE)) {
         ivec2 dest = desiredDest(pos, elem);
         if (dest != pos) {
             uint destElem = getElement(dest);
-            // Check if we can actually go there
             bool canGo = canDisplace(elem, destElem);
-            // Force can push into occupied cells too, but only if target is
-            // a fluid/gas or lower density — prevents Y-column crush bug
             if (!canGo && destElem != VOID && destElem != BLACKHOLE) {
                 vec2 force = getForce(pos);
                 float forceMag = length(force);
                 if (forceMag > 5.0 && destElem != elem) {
-                    // Only allow force override against non-static, non-granular
-                    // OR if target density is less than ours
                     bool targetIsFluid = isLiquid(destElem) || isGas(destElem) || isEmpty(destElem);
                     bool densityAdvantage = (elements[elem].density > elements[destElem].density);
                     if (targetIsFluid || densityAdvantage) {
-                        canGo = true; // Force override
+                        canGo = true;
                     }
                 }
             }
             if (canGo) {
                 ivec2 w = pickWinnerForDest(dest);
                 if (w == pos) {
-                    // We moved. Get what we displaced
                     uvec4 displaced = getState(dest);
                     uint dispElem = displaced.r;
 
-                    // prevent force-override duplication cascades
                     if (dispElem != EMPTY && !isImmobile(dispElem)) {
                         ivec2 dispDest = desiredDest(dest, dispElem);
-
-                        // If the element we are displacing won a move to somewhere else
                         if (dispDest != dest) {
                             ivec2 dispWinner = pickWinnerForDest(dispDest);
                             if (dispWinner == dest) {
-                                // Don't clone it back into our old spot.
                                 displaced = uvec4(EMPTY, 0u, 0u, 0u);
                             }
                         }
-
-                        // mutual diagonal swap prevention
                         if (dispDest == pos) {
                             imageStore(stateOut, pos, uvec4(EMPTY, 0u, 0u, 0u));
                             wakeChunkAndNeighbors(pos);
@@ -1133,7 +952,6 @@ void main() {
                     }
 
                     imageStore(stateOut, pos, displaced);
-                    // We moved - wake both source and destination chunks
                     wakeChunkAndNeighbors(pos);
                     wakeChunkAndNeighbors(dest);
                     return;
@@ -1145,13 +963,11 @@ void main() {
     // Nothing happened - write current state unchanged
     if (!isEmpty(elem) && !isStatic(elem)) {
         if (isGranular(elem)) {
-            // If sand is resting on something it cannot displace, let it sleep
             ivec2 below = pos + ivec2(0, -1);
             if (inBounds(below) && canDisplace(elem, getElement(below))) {
-                wakeChunkAndNeighbors(pos); // Still falling
+                wakeChunkAndNeighbors(pos);
             }
         } else {
-            // Liquids, gases, and spreading elements stay awake to evaluate randomness
             wakeChunkAndNeighbors(pos);
         }
     }

@@ -30,7 +30,8 @@ public:
     Shader& operator=(Shader&& other) noexcept;
 
     bool loadFromFile(std::string_view vertexPath, std::string_view fragmentPath);
-    bool loadCompute(std::string_view computePath, const std::string& header = "");
+    bool loadCompute(std::string_view computePath, const std::string& header = "",
+                     const std::string& dslCode = "");
 
     void use() const;
     void dispatch(GLuint x, GLuint y, GLuint z) const;

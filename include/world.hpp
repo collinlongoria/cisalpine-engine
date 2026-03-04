@@ -202,7 +202,7 @@ public:
     World(const World&) = delete;
     World& operator=(const World&) = delete;
 
-    bool init(const std::string& shaderHeader);
+    bool init(const std::string& shaderHeader, const std::string& dslCode = "");
     void update(float dt);
     void render(int screenX, int screenY, int screenWidth, int screenHeight,
         float camX, float camY, float camZoom, DebugViewMode viewMode = DebugViewMode::Final);
