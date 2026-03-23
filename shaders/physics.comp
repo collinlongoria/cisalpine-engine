@@ -126,6 +126,25 @@ void main() {
             falloff = falloff * falloff; // Quadratic falloff
             force += dir * BOMB_FORCE * falloff;
         }
+
+        // FAN LOGIC
+        else if (eff.type >= 2u && eff.type <= 5u) {
+            // Directional fan force
+            float fanRadius = 20.0;
+            if (dist < fanRadius) {
+                float falloff = 1.0 - (dist / fanRadius);
+                falloff = falloff * falloff;  // Quadratic falloff
+                float strength = eff.strength * falloff;
+
+                vec2 dir;
+                if      (eff.type == 2u) dir = vec2(-1.0, 0.0);  // Left
+                else if (eff.type == 3u) dir = vec2( 1.0, 0.0);  // Right
+                else if (eff.type == 4u) dir = vec2( 0.0, 1.0);  // Up
+                else                     dir = vec2( 0.0,-1.0);  // Down
+
+                force += dir * strength;
+            }
+        }
     }
 
     // Static elements partially absorb force

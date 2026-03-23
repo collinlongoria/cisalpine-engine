@@ -34,7 +34,11 @@ static constexpr int MAX_EFFECTORS = 1024;  // Maximum active effectors per fram
 
 enum EffectorType : uint32_t {
     EFFECTOR_BLACK_HOLE = 0,
-    EFFECTOR_BOMB       = 1
+    EFFECTOR_BOMB       = 1,
+    EFFECTOR_FAN_LEFT   = 2,
+    EFFECTOR_FAN_RIGHT  = 3,
+    EFFECTOR_FAN_UP     = 4,
+    EFFECTOR_FAN_DOWN   = 5
 };
 
 struct GPUEffector {
@@ -50,6 +54,10 @@ struct SimulationSettings {
 
     // Chunk sleep system
     bool chunkSleepEnabled = true;
+
+    // Periodic wake interval (in simulation frames) for DSL reactions in sleeping chunks
+    // Every N frames, all chunks are woken so slow reactions (grass spreading, etc.) can occur
+    int periodicWakeInterval = 30;  // ~0.5 seconds at 60fps
 
     // Global entropy scalar for probabilistic reactions
     float globalEntropy = 1.0f;

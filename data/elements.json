@@ -58,7 +58,7 @@
     "baseHeight": 0.3,
     "colorVariation": 0.08,
     "animType": "Liquid",
-    "script": "INTERACT Fire ROLL 15 TURN Steam\nINTERACT Lava ROLL 15 TURN Steam"
+    "script": "INTERACT Fire ROLL 15 TURN Steam\nINTERACT Lava ROLL 15 TURN Steam\nDEFINE freezeTimer 10\nDEFINE interacted 0\nINTERACT Ice ADD freezeTimer 1 ADD interacted 1\nINTERACT Snow ADD freezeTimer 1 ADD interacted 1\nIF freezeTimer LESSTHAN 4 AND interacted GREATERTHAN 0 ROLL 2 TURN Ice"
   },
   "Lava": {
     "type": "Liquid",
@@ -587,7 +587,7 @@
     ],
     "baseHeight": 0.9,
     "colorVariation": 0.06,
-    "script": "INTERACT Fire ROLL 80 TURN Water\nINTERACT Lava ROLL 80 TURN Water\nROLL 0 TURN Water"
+    "script": "MAKES COLD\nINTERACT Fire ROLL 80 TURN Water\nINTERACT Lava ROLL 80 TURN Water"
   },
   "Steam": {
     "type": "Gas",
@@ -665,15 +665,25 @@
     "colorVariation": 0.06
   },
   "Snow": {
-    "color": [0.92, 0.95, 1.0, 1.0],
+    "color": [
+      0.92,
+      0.95,
+      1.0,
+      1.0
+    ],
     "type": "Granular",
     "density": 1.5,
     "mass": 0.3,
     "colorVariation": 0.04,
-    "script": "MAKES COLD"
+    "script": "MAKES COLD\nINTERACT Fire ROLL 60 TURN Water\nINTERACT Lava ROLL 60 TURN Water"
   },
   "Metal": {
-    "color": [0.58, 0.60, 0.63, 1.0],
+    "color": [
+      0.58,
+      0.6,
+      0.63,
+      1.0
+    ],
     "type": "Static",
     "density": 50.0,
     "specularPower": 32.0,
@@ -681,7 +691,12 @@
     "script": "INTERACT Lava TURN Slag\nINTERACT Fire TURN Slag\nINTERACT Slag TURN Slag"
   },
   "Slag": {
-    "color": [0.85, 0.35, 0.08, 1.0],
+    "color": [
+      0.85,
+      0.35,
+      0.08,
+      1.0
+    ],
     "type": "Liquid",
     "density": 45.0,
     "viscosity": 0.85,
@@ -692,11 +707,64 @@
     "script": "MAKES HOT\nINTERACT Ice TURN Metal\nINTERACT Water TURN Metal\nINTERACT Snow TURN Metal"
   },
   "Locusts": {
-    "color": [0.22, 0.28, 0.12, 1.0],
+    "color": [
+      0.22,
+      0.28,
+      0.12,
+      1.0
+    ],
     "type": "Static",
     "density": 0.8,
     "mass": 0.2,
     "colorVariation": 0.1,
     "script": "SWARM 5 2"
+  },
+  "FanLeft": {
+    "type": "Static",
+    "color": [
+      0.5,
+      0.6,
+      0.75,
+      1.0
+    ],
+    "density": 100,
+    "specularPower": 4.0,
+    "colorVariation": 0.04
+  },
+  "FanRight": {
+    "type": "Static",
+    "color": [
+      0.5,
+      0.6,
+      0.75,
+      1.0
+    ],
+    "density": 100,
+    "specularPower": 4.0,
+    "colorVariation": 0.04
+  },
+  "FanUp": {
+    "type": "Static",
+    "color": [
+      0.5,
+      0.6,
+      0.75,
+      1.0
+    ],
+    "density": 100,
+    "specularPower": 4.0,
+    "colorVariation": 0.04
+  },
+  "FanDown": {
+    "type": "Static",
+    "color": [
+      0.5,
+      0.6,
+      0.75,
+      1.0
+    ],
+    "density": 100,
+    "specularPower": 4.0,
+    "colorVariation": 0.04
   }
 }

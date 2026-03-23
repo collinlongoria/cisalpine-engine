@@ -394,6 +394,10 @@ void App::renderSettingsWindow() {
     if (simSettings.chunkSleepEnabled) {
         ImGui::Text("Chunks: %d/%d active", world->getActiveChunkCount(), world->getTotalChunks());
         ImGui::Text("Grid: %dx%d", world->getChunkGridWidth(), world->getChunkGridHeight());
+        ImGui::SliderInt("Wake Interval", &simSettings.periodicWakeInterval, 0, 120);
+        if (ImGui::IsItemHovered()) {
+            ImGui::SetTooltip("Frames between full chunk wakes (0 = disabled).\nLower = more responsive reactions, higher = better performance.");
+        }
     }
     ImGui::SliderFloat("Entropy", &simSettings.globalEntropy, 0.1f, 3.0f, "%.2f");
 

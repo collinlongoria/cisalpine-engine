@@ -568,6 +568,13 @@ void World::simulationStep() {
     gpuTimers[TIMER_SIMULATION].begin();
 
     if (simSettings.chunkSleepEnabled) {
+        // Periodic wake: every N frames, wake all chunks so slow DSL reactions
+        // (grass spreading, ice melting, cloud rain, etc.) can fire in sleeping chunks
+        if (simSettings.periodicWakeInterval > 0 &&
+            (frameCount % static_cast<uint32_t>(simSettings.periodicWakeInterval)) == 0) {
+            wakeAllChunks();
+        }
+
         gpuTimers[TIMER_SIMULATION].end();
 
         gpuTimers[TIMER_CHUNK_BUILD].begin();

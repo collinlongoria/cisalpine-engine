@@ -6,7 +6,6 @@ layout(rgba8ui, binding = 0) uniform readonly uimage2D stateIn;
 layout(rgba8ui, binding = 1) uniform writeonly uimage2D stateOut;
 layout(rgba16f, binding = 3) uniform readonly image2D forceField;
 
-// DSL Integration: Updated ElementData struct - removed flammability, probability, maxLife
 struct ElementData {
     vec4 color;                // 0-15
     int type;                  // 16-19
@@ -293,6 +292,18 @@ ivec2 forceBasedDest(ivec2 src, uint elem, vec2 force) {
     return ivec2(-1);
 }
 
+// Swarm direction decoding helper
+// Direction code 1-9 maps to dx,dy offsets:
+//   code = (dx+1)*3 + (dy+1) + 1
+//   So code 1 = (-1,-1), code 5 = (0,0) [shouldn't happen], code 9 = (1,1)
+ivec2 decodeSwarmDir(uint code) {
+    if (code == 0u || code > 9u) return ivec2(0, 0);
+    int c = int(code) - 1;
+    int dx = (c / 3) - 1;
+    int dy = (c % 3) - 1;
+    return ivec2(dx, dy);
+}
+
 ivec2 desiredDest(ivec2 src, uint elem) {
     vec2 force = getForce(src);
     if (elem != VOID && elem != BLACKHOLE) {
@@ -300,7 +311,30 @@ ivec2 desiredDest(ivec2 src, uint elem) {
         if (forceDest.x >= 0) return forceDest;
     }
 
-    if (isStatic(elem)) return src;
+    if (isStatic(elem)) {
+        // Check for swarm movement direction (encoded in .a channel by DSL)
+        uvec4 srcState = getState(src);
+        uint swarmDir = srcState.a;
+        if (swarmDir >= 1u && swarmDir <= 9u) {
+            ivec2 dir = decodeSwarmDir(swarmDir);
+            if (dir.x != 0 || dir.y != 0) {
+                ivec2 target = src + dir;
+                if (inBounds(target) && getElement(target) == EMPTY) {
+                    return target;
+                }
+                // Try partial directions as fallback
+                if (dir.x != 0) {
+                    ivec2 altX = src + ivec2(dir.x, 0);
+                    if (inBounds(altX) && getElement(altX) == EMPTY) return altX;
+                }
+                if (dir.y != 0) {
+                    ivec2 altY = src + ivec2(0, dir.y);
+                    if (inBounds(altY) && getElement(altY) == EMPTY) return altY;
+                }
+            }
+        }
+        return src;
+    }
 
     int type = elements[elem].type;
     ivec2 down  = src + ivec2(0, -1);
@@ -560,6 +594,7 @@ void main() {
     ivec2 winner = pickWinnerForDest(pos);
     if (winner.x != 999999 && !isAnchored) {
         uvec4 winState = getState(winner);
+        winState.a = 0u;  // Clear swarm direction after movement
         imageStore(stateOut, pos, winState);
         wakeChunkAndNeighbors(pos);
         return;
@@ -574,6 +609,11 @@ void main() {
     if (elem == BLACKHOLE) {
         emitEffector(vec2(pos), 0u, 8.0);
     }
+
+    if (elem == FANLEFT)  emitEffector(vec2(pos), 2u, 10.0);
+    if (elem == FANRIGHT) emitEffector(vec2(pos), 3u, 10.0);
+    if (elem == FANUP)    emitEffector(vec2(pos), 4u, 10.0);
+    if (elem == FANDOWN)  emitEffector(vec2(pos), 5u, 10.0);
 
     // VOID: Destroy anything touching it
     if (elem != VOID && elem != BLACKHOLE && elem != EMPTY) {
@@ -685,8 +725,9 @@ void main() {
             wakeChunkAndNeighbors(pos);
             return;
         }
-        // Write back potentially updated custom data
+        // Write back potentially updated custom data and swarm direction
         cur.b = customData;
+        cur.a = dslState.a;  // Preserve swarm direction for desiredDest
     }
 
     // SEED -> GRASS Logic
@@ -995,6 +1036,8 @@ void main() {
         bool keepAwake = false;
         if (elem == BLACKHOLE || elem == VOID) keepAwake = true;
         if (elem == GRASS && life > 30u) keepAwake = true;
+        // Swarm elements must always stay awake for continuous movement
+        if (cur.a >= 1u && cur.a <= 9u) keepAwake = true;
 
         if (!isStatic(elem) || keepAwake) {
             if (isGranular(elem) && !keepAwake) {

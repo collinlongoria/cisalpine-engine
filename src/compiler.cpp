@@ -186,7 +186,7 @@ std::string TurnNode::generateGLSL(const std::string& indent) const {
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
     return indent + "curState.r = " + upper + ";\n"
          + indent + "curState.g = 0u;\n"
-         + indent + "customData = 0u;\n"
+         + indent + "customData = getInitCustomData(" + upper + ");\n"
          + indent + "changed = true;\n";
 }
 
@@ -300,9 +300,14 @@ std::string InteractNode::generateGLSL(const std::string& indent) const {
 std::string SwarmNode::generateGLSL(const std::string& indent) const {
     std::string glsl;
 
-    glsl += indent + "// SWARM: boid-like flocking\n";
+    // Instead of doing direct imageStore (which races), we encode a desired
+    // movement direction into curState.a using a 1-9 encoding:
+    //   0 = no movement, 1-9 = direction index (see swarmDirX/swarmDirY in simulation.comp)
+    // The simulation shader's main() reads this and handles movement safely
+    // using the existing propose-and-vote system.
+
+    glsl += indent + "// SWARM: boid-like flocking (direction encoding)\n";
     glsl += indent + "{\n";
-    glsl += indent + "    // Cohesion + alignment: average position of nearby same-element cells\n";
     glsl += indent + "    vec2 cohesion = vec2(0.0);\n";
     glsl += indent + "    vec2 separation = vec2(0.0);\n";
     glsl += indent + "    int neighborCount = 0;\n";
@@ -323,46 +328,36 @@ std::string SwarmNode::generateGLSL(const std::string& indent) const {
     glsl += indent + "            }\n";
     glsl += indent + "        }\n";
     glsl += indent + "    }\n";
+    glsl += indent + "    int moveX = 0;\n";
+    glsl += indent + "    int moveY = 0;\n";
     glsl += indent + "    if (neighborCount > 0) {\n";
     glsl += indent + "        cohesion /= float(neighborCount);\n";
     glsl += indent + "        vec2 steer = cohesion * 0.4 + separation * 0.6;\n";
     glsl += indent + "        float steerLen = length(steer);\n";
     glsl += indent + "        if (steerLen > 0.1) {\n";
     glsl += indent + "            steer /= steerLen;\n";
-    glsl += indent + "            // Add randomness for natural look\n";
-    glsl += indent + "            float rng = random01(pos);\n";
-    glsl += indent + "            steer.x += (rng - 0.5) * 0.5;\n";
+    glsl += indent + "            steer.x += (random01(pos) - 0.5) * 0.5;\n";
     glsl += indent + "            steer.y += (random01b(pos) - 0.5) * 0.5;\n";
-    glsl += indent + "            int moveX = int(sign(steer.x));\n";
-    glsl += indent + "            int moveY = int(sign(steer.y));\n";
-    glsl += indent + "            ivec2 target = pos + ivec2(moveX, moveY);\n";
-    glsl += indent + "            if (inBounds(target) && getElement(target) == EMPTY) {\n";
-    glsl += indent + "                if (random01(pos) < 0.7) {\n";
-    glsl += indent + "                    imageStore(stateOut, target, uvec4(elem, curState.g, curState.b, curState.a));\n";
-    glsl += indent + "                    curState.r = EMPTY;\n";
-    glsl += indent + "                    curState.g = 0u;\n";
-    glsl += indent + "                    changed = true;\n";
-    glsl += indent + "                    wakeChunkAndNeighbors(target);\n";
-    glsl += indent + "                    return;\n";
-    glsl += indent + "                }\n";
-    glsl += indent + "            }\n";
+    glsl += indent + "            moveX = int(sign(steer.x));\n";
+    glsl += indent + "            moveY = int(sign(steer.y));\n";
+    glsl += indent + "        } else {\n";
+    glsl += indent + "            // Neighbors too close/balanced, wander\n";
+    glsl += indent + "            moveX = int(random01(pos) * 3.0) - 1;\n";
+    glsl += indent + "            moveY = int(random01b(pos) * 3.0) - 1;\n";
     glsl += indent + "        }\n";
     glsl += indent + "    } else {\n";
     glsl += indent + "        // No neighbors: wander randomly\n";
-    glsl += indent + "        float rng = random01(pos);\n";
-    glsl += indent + "        int wx = int(rng * 3.0) - 1;\n";
-    glsl += indent + "        int wy = int(random01b(pos) * 3.0) - 1;\n";
-    glsl += indent + "        ivec2 wTarget = pos + ivec2(wx, wy);\n";
-    glsl += indent + "        if (inBounds(wTarget) && getElement(wTarget) == EMPTY) {\n";
-    glsl += indent + "            if (random01(pos) < 0.7) {\n";
-    glsl += indent + "                imageStore(stateOut, wTarget, uvec4(elem, curState.g, curState.b, curState.a));\n";
-    glsl += indent + "                curState.r = EMPTY;\n";
-    glsl += indent + "                curState.g = 0u;\n";
-    glsl += indent + "                changed = true;\n";
-    glsl += indent + "                wakeChunkAndNeighbors(wTarget);\n";
-    glsl += indent + "                return;\n";
-    glsl += indent + "            }\n";
-    glsl += indent + "        }\n";
+    glsl += indent + "        moveX = int(random01(pos) * 3.0) - 1;\n";
+    glsl += indent + "        moveY = int(random01b(pos) * 3.0) - 1;\n";
+    glsl += indent + "    }\n";
+    glsl += indent + "    // Only move some of the time for natural pacing\n";
+    glsl += indent + "    if ((moveX != 0 || moveY != 0) && random01(pos) < 0.7) {\n";
+    glsl += indent + "        // Encode direction as 1-9: (moveX+1)*3 + (moveY+1) + 1\n";
+    glsl += indent + "        // This maps (-1,-1) to 1, (0,-1) to 2, ... (1,1) to 9\n";
+    glsl += indent + "        // 0 = no movement\n";
+    glsl += indent + "        uint dirCode = uint((moveX + 1) * 3 + (moveY + 1)) + 1u;\n";
+    glsl += indent + "        curState.a = dirCode;\n";
+    glsl += indent + "        changed = true;\n";
     glsl += indent + "    }\n";
     glsl += indent + "}\n";
 
@@ -796,14 +791,33 @@ bool DSLCompiler::compile(const std::string& elementName, int elementId, const s
 std::string DSLCompiler::emitGLSL() const {
     if (scripts.empty()) {
         return "// No DSL scripts compiled\n"
+               "uint getInitCustomData(uint elemId) { return 0u; }\n"
                "void executeCustomBehaviors(ivec2 pos, inout uvec4 curState, inout uint customData) {}\n";
     }
 
     std::ostringstream glsl;
 
-    // Helper: tryCreateAdjacent
+    // Helper: getInitCustomData - returns packed initial custom data for an element
+    // This is used by TURN to initialize DEFINE'd variables on the target element.
     glsl << "// --- BEGIN GENERATED DSL LOGIC ---\n\n";
 
+    glsl << "// Helper: get initial custom data (DEFINE'd variables) for an element\n";
+    glsl << "uint getInitCustomData(uint elemId) {\n";
+    glsl << "    switch (elemId) {\n";
+    for (const auto& script : scripts) {
+        uint32_t initData = getInitialCustomData(script.elementId);
+        if (initData != 0 || !script.variables.empty()) {
+            std::string upper = script.elementName;
+            std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+            glsl << "        case " << upper << ": return "
+                 << initData << "u;\n";
+        }
+    }
+    glsl << "        default: return 0u;\n";
+    glsl << "    }\n";
+    glsl << "}\n\n";
+
+    // Helper: tryCreateAdjacent
     glsl << "// Helper: attempt to spawn element in an adjacent EMPTY cell\n";
     glsl << "void tryCreateAdjacent(ivec2 pos, uint element) {\n";
     glsl << "    // Check all 8 neighbors for an empty cell\n";
