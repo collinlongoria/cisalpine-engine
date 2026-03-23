@@ -42,6 +42,18 @@ enum class TokenType {
     CREATE,
     MAKES,
     BURN,
+    SWARM,       // Boid-like flocking behavior
+
+    // Direction keywords
+    ABOVE,       // Check/interact with cell above
+    BELOW,       // Check/interact with cell below
+    LEFTOF,      // Check/interact with cell left
+    RIGHTOF,     // Check/interact with cell right
+
+    // Built-in readable values
+    HEIGHTABOVE, // Pixel Y-distance to top of world
+    HEIGHTBELOW, // Pixel Y-distance to bottom of world
+    NEARBY,      // Count of same-element neighbors
 
     // Operators
     LESSTHAN,
@@ -163,9 +175,21 @@ struct IfNode : public ASTNode {
 };
 
 // INTERACT ELEMENT_NAME { actions... }
+// Optional direction: ABOVE/BELOW/LEFT/RIGHT restricts neighbor check
 struct InteractNode : public ASTNode {
     std::string targetElement;
     std::vector<ASTNodePtr> actions; // Actions executed when neighbor is found
+    int dirX = 0;  // 0 = any direction (original behavior)
+    int dirY = 0;  // Non-zero = specific direction check
+
+    std::string generateGLSL(const std::string& indent = "    ") const override;
+};
+
+// SWARM - boid-like flocking behavior
+// Generates GLSL that moves the element toward nearby same-type neighbors
+struct SwarmNode : public ASTNode {
+    int cohesionRadius = 5;   // How far to look for neighbors
+    int separationDist = 1;   // Minimum distance to maintain
 
     std::string generateGLSL(const std::string& indent = "    ") const override;
 };

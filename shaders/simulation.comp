@@ -651,9 +651,29 @@ void main() {
         }
     }
 
-    // === DSL CUSTOM BEHAVIORS ===
-    // Execute data-driven element interactions compiled from scripts
-    if (elem != EMPTY && elem < MAX_ELEMENTS) {
+    // Check if we are going to successfully move this frame to prevent double-update duplication
+    bool willMove = false;
+    if (elem != EMPTY && elem != VOID && elem != BLACKHOLE) {
+        ivec2 dest = desiredDest(pos, elem);
+        if (dest != pos) {
+            uint destElem = getElement(dest);
+            bool canGo = canDisplace(elem, destElem);
+            if (!canGo && destElem != VOID && destElem != BLACKHOLE) {
+                vec2 force = getForce(pos);
+                if (length(force) > 5.0 && destElem != elem) {
+                    bool targetIsFluid = isLiquid(destElem) || isGas(destElem) || isEmpty(destElem);
+                    bool densityAdvantage = (elements[elem].density > elements[destElem].density);
+                    if (targetIsFluid || densityAdvantage) canGo = true;
+                }
+            }
+            if (canGo && pickWinnerForDest(dest) == pos) {
+                willMove = true;
+            }
+        }
+    }
+
+    // Execute data-driven element interactions compiled from scripts ONLY if not moving away
+    if (!willMove && elem != EMPTY && elem < MAX_ELEMENTS) {
         uint customData = cur.b; // B channel = custom DSL state
         uvec4 dslState = cur;
         executeCustomBehaviors(pos, dslState, customData);
@@ -777,13 +797,16 @@ void main() {
 
     // EMPTY CELL
     if (elem == EMPTY) {
-        // Cloud rain
+        // Cloud rain - check cloud above
         ivec2 above = pos + ivec2(0, 1);
         if (inBounds(above)) {
             uvec4 aboveState = getState(above);
-            if (aboveState.r == CLOUD && aboveState.g > 15u) {
+            if (aboveState.r == CLOUD) {
+                uint cloudDark = aboveState.b;
+                float baseChance = 0.003;
+                float darkBonus = float(cloudDark) * 0.004;
                 float rainRoll = float(hash3u(uvec2(pos), frameCount * 43u + 29u) & 0xFFFFu) / 65535.0;
-                if (rainRoll < 0.006) {
+                if (rainRoll < (baseChance + darkBonus) && aboveState.g > 5u) {
                     imageStore(stateOut, pos, uvec4(WATER, 0u, 0u, 0u));
                     wakeChunkAndNeighbors(pos);
                     return;
@@ -833,14 +856,37 @@ void main() {
         wakeChunkAndNeighbors(pos);
     }
 
-    // Cloud decay & rain
+    // Cloud decay & rain - height-based behavior
+    // Clouds darken at height via the B channel (darkLevel: 0=white, higher=darker)
+    // When dark enough (B >= 3), they produce rain much more aggressively
     if (elem == CLOUD) {
         float roll = float(hash3u(uvec2(pos), frameCount * 13u + 7u) & 0xFFFFu) / 65535.0;
+        uint darkLevel = cur.b; // 0 = white cloud, increases = darker
+
+        // Height-based darkening: clouds above 60% world height get darker over time
+        float normalizedY = float(pos.y) / worldSize.y;
+        if (normalizedY > 0.55) {
+            float darkenChance = (normalizedY - 0.55) * 0.15 * globalEntropy;
+            float darkenRoll = float(hash3u(uvec2(pos), frameCount * 67u + 11u) & 0xFFFFu) / 65535.0;
+            if (darkenRoll < darkenChance && darkLevel < 5u) {
+                darkLevel += 1u;
+                cur.b = darkLevel;
+            }
+        }
+
+        // Rain production - increases with darkness
         ivec2 below = pos + ivec2(0, -1);
         if (inBounds(below) && getElement(below) == EMPTY) {
-            float rainChance = 0.008 * globalEntropy;
-            if (roll < rainChance && life > 10u) cur.g = life - 5u;
+            float baseRainChance = 0.004 * globalEntropy;
+            // Dark clouds rain much more
+            float rainMultiplier = 1.0 + float(darkLevel) * 2.5;
+            float rainChance = baseRainChance * rainMultiplier;
+            if (roll < rainChance && life > 5u) {
+                cur.g = life - 3u;
+            }
         }
+
+        // Decay
         uint cloudDecay = 1u;
         uint randDecay = hash3u(uvec2(pos), frameCount * 41u) % 3u;
         if (randDecay == 0u) {
@@ -854,23 +900,7 @@ void main() {
         wakeChunkAndNeighbors(pos);
     }
 
-    // Fuser: melts/burns neighbors (kept from original - writes to neighbor cells)
-    if (elem == FUSER) {
-        for (int dy = -1; dy <= 1; dy++) {
-            for (int dx = -1; dx <= 1; dx++) {
-                ivec2 np = pos + ivec2(dx, dy);
-                if (!inBounds(np)) continue;
-                uint nElem = getElement(np);
-                if (nElem == SAND || nElem == STONE || nElem == OBSIDIAN) {
-                    if (random01(np) < 0.05) {
-                        imageStore(stateOut, np, uvec4(LAVA, 0u, 0u, 0u));
-                        wakeChunkAndNeighbors(np);
-                    }
-                }
-            }
-        }
-        wakeChunkAndNeighbors(pos);
-    }
+    // (Fuser removed - element deleted)
 
     // SMOKE DECAY
     if (elem == SMOKE) {
@@ -961,14 +991,20 @@ void main() {
     }
 
     // Nothing happened - write current state unchanged
-    if (!isEmpty(elem) && !isStatic(elem)) {
-        if (isGranular(elem)) {
-            ivec2 below = pos + ivec2(0, -1);
-            if (inBounds(below) && canDisplace(elem, getElement(below))) {
+    if (!isEmpty(elem)) {
+        bool keepAwake = false;
+        if (elem == BLACKHOLE || elem == VOID) keepAwake = true;
+        if (elem == GRASS && life > 30u) keepAwake = true;
+
+        if (!isStatic(elem) || keepAwake) {
+            if (isGranular(elem) && !keepAwake) {
+                ivec2 below = pos + ivec2(0, -1);
+                if (inBounds(below) && canDisplace(elem, getElement(below))) {
+                    wakeChunkAndNeighbors(pos);
+                }
+            } else {
                 wakeChunkAndNeighbors(pos);
             }
-        } else {
-            wakeChunkAndNeighbors(pos);
         }
     }
 

@@ -40,6 +40,14 @@ bool Lexer::isKeyword(const std::string& word, TokenType& out) {
         {"CREATE",      TokenType::CREATE},
         {"MAKES",       TokenType::MAKES},
         {"BURN",        TokenType::BURN},
+        {"SWARM",       TokenType::SWARM},
+        {"ABOVE",       TokenType::ABOVE},
+        {"BELOW",       TokenType::BELOW},
+        {"LEFTOF",      TokenType::LEFTOF},
+        {"RIGHTOF",     TokenType::RIGHTOF},
+        {"HEIGHTABOVE", TokenType::HEIGHTABOVE},
+        {"HEIGHTBELOW", TokenType::HEIGHTBELOW},
+        {"NEARBY",      TokenType::NEARBY},
         {"LESSTHAN",    TokenType::LESSTHAN},
         {"GREATERTHAN", TokenType::GREATERTHAN},
         {"EQUAL",       TokenType::EQUAL},
@@ -137,9 +145,22 @@ std::vector<Token> Lexer::tokenize(const std::string& source) {
     return tokens;
 }
 
-// ============================================================
-// AST Node GLSL Generation
-// ============================================================
+static void findMakesNodes(const ASTNodePtr& node, bool& makesHot, bool& makesCold) {
+    if (!node) return;
+    if (auto makes = std::dynamic_pointer_cast<MakesNode>(node)) {
+        if (makes->isHot) makesHot = true;
+        else makesCold = true;
+    } else if (auto roll = std::dynamic_pointer_cast<RollNode>(node)) {
+        findMakesNodes(roll->trueAction, makesHot, makesCold);
+        findMakesNodes(roll->falseAction, makesHot, makesCold);
+    } else if (auto ifNode = std::dynamic_pointer_cast<IfNode>(node)) {
+        for (auto& c : ifNode->body) findMakesNodes(c, makesHot, makesCold);
+    } else if (auto interact = std::dynamic_pointer_cast<InteractNode>(node)) {
+        for (auto& c : interact->actions) findMakesNodes(c, makesHot, makesCold);
+    } else if (auto block = std::dynamic_pointer_cast<BlockNode>(node)) {
+        for (auto& c : block->children) findMakesNodes(c, makesHot, makesCold);
+    }
+}
 
 // Note: These generateGLSL methods use placeholder patterns.
 // The DSLCompiler::emitGLSL method wraps them with proper variable
@@ -214,8 +235,13 @@ std::string IfNode::generateGLSL(const std::string& indent) const {
         const Condition& cond = conditions[i];
 
         // Variable read will be injected by the compiler
-        // For now, use placeholder - the compiler replaces these
-        std::string varRead = "VAR_" + cond.varName;
+        // Built-in variables start with dsl_ and are already declared
+        std::string varRead;
+        if (cond.varName.substr(0, 4) == "dsl_") {
+            varRead = cond.varName; // Built-in: use directly
+        } else {
+            varRead = "VAR_" + cond.varName; // User-defined: placeholder
+        }
         std::string op;
         switch (cond.op) {
             case TokenType::LESSTHAN:    op = " < "; break;
@@ -243,20 +269,103 @@ std::string InteractNode::generateGLSL(const std::string& indent) const {
 
     glsl += indent + "{\n";
     glsl += indent + "    bool " + foundVar + " = false;\n";
-    glsl += indent + "    for (int dy = -1; dy <= 1; dy++) {\n";
-    glsl += indent + "        for (int dx = -1; dx <= 1; dx++) {\n";
-    glsl += indent + "            if (dx == 0 && dy == 0) continue;\n";
-    glsl += indent + "            if (getElement(pos + ivec2(dx, dy)) == " + upper + ") {\n";
-    glsl += indent + "                " + foundVar + " = true;\n";
-    glsl += indent + "            }\n";
-    glsl += indent + "        }\n";
-    glsl += indent + "    }\n";
+
+    if (dirX != 0 || dirY != 0) {
+        // Directional check - only check specific neighbor
+        glsl += indent + "    if (getElement(pos + ivec2(" +
+                std::to_string(dirX) + ", " + std::to_string(dirY) + ")) == " + upper + ") {\n";
+        glsl += indent + "        " + foundVar + " = true;\n";
+        glsl += indent + "    }\n";
+    } else {
+        // Original behavior - check all 8 neighbors
+        glsl += indent + "    for (int dy = -1; dy <= 1; dy++) {\n";
+        glsl += indent + "        for (int dx = -1; dx <= 1; dx++) {\n";
+        glsl += indent + "            if (dx == 0 && dy == 0) continue;\n";
+        glsl += indent + "            if (getElement(pos + ivec2(dx, dy)) == " + upper + ") {\n";
+        glsl += indent + "                " + foundVar + " = true;\n";
+        glsl += indent + "            }\n";
+        glsl += indent + "        }\n";
+        glsl += indent + "    }\n";
+    }
+
     glsl += indent + "    if (" + foundVar + ") {\n";
     for (const auto& action : actions) {
         glsl += action->generateGLSL(indent + "        ");
     }
     glsl += indent + "    }\n";
     glsl += indent + "}\n";
+    return glsl;
+}
+
+std::string SwarmNode::generateGLSL(const std::string& indent) const {
+    std::string glsl;
+
+    glsl += indent + "// SWARM: boid-like flocking\n";
+    glsl += indent + "{\n";
+    glsl += indent + "    // Cohesion + alignment: average position of nearby same-element cells\n";
+    glsl += indent + "    vec2 cohesion = vec2(0.0);\n";
+    glsl += indent + "    vec2 separation = vec2(0.0);\n";
+    glsl += indent + "    int neighborCount = 0;\n";
+    glsl += indent + "    int radius = " + std::to_string(cohesionRadius) + ";\n";
+    glsl += indent + "    int sepDist = " + std::to_string(separationDist) + ";\n";
+    glsl += indent + "    for (int sdy = -radius; sdy <= radius; sdy++) {\n";
+    glsl += indent + "        for (int sdx = -radius; sdx <= radius; sdx++) {\n";
+    glsl += indent + "            if (sdx == 0 && sdy == 0) continue;\n";
+    glsl += indent + "            ivec2 np = pos + ivec2(sdx, sdy);\n";
+    glsl += indent + "            if (!inBounds(np)) continue;\n";
+    glsl += indent + "            if (getElement(np) == elem) {\n";
+    glsl += indent + "                cohesion += vec2(float(sdx), float(sdy));\n";
+    glsl += indent + "                neighborCount++;\n";
+    glsl += indent + "                float d = length(vec2(float(sdx), float(sdy)));\n";
+    glsl += indent + "                if (d < float(sepDist) + 0.5 && d > 0.0) {\n";
+    glsl += indent + "                    separation -= vec2(float(sdx), float(sdy)) / max(d, 0.1);\n";
+    glsl += indent + "                }\n";
+    glsl += indent + "            }\n";
+    glsl += indent + "        }\n";
+    glsl += indent + "    }\n";
+    glsl += indent + "    if (neighborCount > 0) {\n";
+    glsl += indent + "        cohesion /= float(neighborCount);\n";
+    glsl += indent + "        vec2 steer = cohesion * 0.4 + separation * 0.6;\n";
+    glsl += indent + "        float steerLen = length(steer);\n";
+    glsl += indent + "        if (steerLen > 0.1) {\n";
+    glsl += indent + "            steer /= steerLen;\n";
+    glsl += indent + "            // Add randomness for natural look\n";
+    glsl += indent + "            float rng = random01(pos);\n";
+    glsl += indent + "            steer.x += (rng - 0.5) * 0.5;\n";
+    glsl += indent + "            steer.y += (random01b(pos) - 0.5) * 0.5;\n";
+    glsl += indent + "            int moveX = int(sign(steer.x));\n";
+    glsl += indent + "            int moveY = int(sign(steer.y));\n";
+    glsl += indent + "            ivec2 target = pos + ivec2(moveX, moveY);\n";
+    glsl += indent + "            if (inBounds(target) && getElement(target) == EMPTY) {\n";
+    glsl += indent + "                if (random01(pos) < 0.7) {\n";
+    glsl += indent + "                    imageStore(stateOut, target, uvec4(elem, curState.g, curState.b, curState.a));\n";
+    glsl += indent + "                    curState.r = EMPTY;\n";
+    glsl += indent + "                    curState.g = 0u;\n";
+    glsl += indent + "                    changed = true;\n";
+    glsl += indent + "                    wakeChunkAndNeighbors(target);\n";
+    glsl += indent + "                    return;\n";
+    glsl += indent + "                }\n";
+    glsl += indent + "            }\n";
+    glsl += indent + "        }\n";
+    glsl += indent + "    } else {\n";
+    glsl += indent + "        // No neighbors: wander randomly\n";
+    glsl += indent + "        float rng = random01(pos);\n";
+    glsl += indent + "        int wx = int(rng * 3.0) - 1;\n";
+    glsl += indent + "        int wy = int(random01b(pos) * 3.0) - 1;\n";
+    glsl += indent + "        ivec2 wTarget = pos + ivec2(wx, wy);\n";
+    glsl += indent + "        if (inBounds(wTarget) && getElement(wTarget) == EMPTY) {\n";
+    glsl += indent + "            if (random01(pos) < 0.7) {\n";
+    glsl += indent + "                imageStore(stateOut, wTarget, uvec4(elem, curState.g, curState.b, curState.a));\n";
+    glsl += indent + "                curState.r = EMPTY;\n";
+    glsl += indent + "                curState.g = 0u;\n";
+    glsl += indent + "                changed = true;\n";
+    glsl += indent + "                wakeChunkAndNeighbors(wTarget);\n";
+    glsl += indent + "                return;\n";
+    glsl += indent + "            }\n";
+    glsl += indent + "        }\n";
+    glsl += indent + "    }\n";
+    glsl += indent + "}\n";
+
     return glsl;
 }
 
@@ -292,12 +401,34 @@ static int expectNumber(const std::vector<Token>& tokens, size_t& pos) {
 }
 
 static std::string expectIdentifier(const std::vector<Token>& tokens, size_t& pos) {
-    if (!match(tokens, pos, TokenType::IDENTIFIER)) {
-        throw std::runtime_error("DSL Parser: Expected identifier at token " + std::to_string(pos));
+    if (pos >= tokens.size()) {
+        throw std::runtime_error("DSL Parser: Expected identifier at end of input");
     }
-    std::string val = tokens[pos].value;
-    pos++;
-    return val;
+    // Accept IDENTIFIER tokens directly
+    if (tokens[pos].type == TokenType::IDENTIFIER) {
+        std::string val = tokens[pos].value;
+        pos++;
+        return val;
+    }
+    // Also accept keyword tokens that might be element names.
+    // Keywords are uppercased by the lexer, so convert back to title case
+    // for element name matching (e.g., "HOT" -> "Hot", "COLD" -> "Cold").
+    // This allows scripts like "INTERACT Hot" where Hot is both a keyword and element name.
+    TokenType t = tokens[pos].type;
+    if (t == TokenType::HOT || t == TokenType::COLD ||
+        t == TokenType::BURN || t == TokenType::SET ||
+        t == TokenType::ADD || t == TokenType::CREATE ||
+        t == TokenType::TURN || t == TokenType::ROLL ||
+        t == TokenType::MAKES) {
+        // Reconstruct as title-case identifier
+        std::string val = tokens[pos].value;
+        if (!val.empty()) {
+            for (size_t i = 1; i < val.size(); i++) val[i] = std::tolower(val[i]);
+        }
+        pos++;
+        return val;
+    }
+    throw std::runtime_error("DSL Parser: Expected identifier at token " + std::to_string(pos));
 }
 
 ASTNodePtr DSLCompiler::parseAction(const std::vector<Token>& tokens, size_t& pos) {
@@ -370,8 +501,20 @@ ASTNodePtr DSLCompiler::parseAction(const std::vector<Token>& tokens, size_t& po
             if (next.type == TokenType::TURN || next.type == TokenType::CREATE ||
                 next.type == TokenType::MAKES || next.type == TokenType::BURN ||
                 next.type == TokenType::ROLL || next.type == TokenType::SET ||
-                next.type == TokenType::ADD) {
+                next.type == TokenType::ADD || next.type == TokenType::SWARM) {
                 node->falseAction = parseAction(tokens, pos);
+            }
+            return node;
+        }
+        case TokenType::SWARM: {
+            pos++;
+            auto node = std::make_shared<SwarmNode>();
+            // Optional: SWARM radius separation
+            if (match(tokens, pos, TokenType::NUMBER)) {
+                node->cohesionRadius = expectNumber(tokens, pos);
+            }
+            if (match(tokens, pos, TokenType::NUMBER)) {
+                node->separationDist = expectNumber(tokens, pos);
             }
             return node;
         }
@@ -395,6 +538,18 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
         case TokenType::INTERACT: {
             pos++;
             auto node = std::make_shared<InteractNode>();
+
+            // Check for directional modifier before element name
+            if (match(tokens, pos, TokenType::ABOVE)) {
+                node->dirX = 0; node->dirY = 1; pos++;
+            } else if (match(tokens, pos, TokenType::BELOW)) {
+                node->dirX = 0; node->dirY = -1; pos++;
+            } else if (match(tokens, pos, TokenType::LEFTOF)) {
+                node->dirX = -1; node->dirY = 0; pos++;
+            } else if (match(tokens, pos, TokenType::RIGHTOF)) {
+                node->dirX = 1; node->dirY = 0; pos++;
+            }
+
             node->targetElement = expectIdentifier(tokens, pos);
             // Parse subsequent actions until we hit another top-level statement or EOF
             while (pos < tokens.size()) {
@@ -403,6 +558,7 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
                 if (next.type == TokenType::INTERACT ||
                     next.type == TokenType::IF ||
                     next.type == TokenType::DEFINE ||
+                    next.type == TokenType::SWARM ||
                     next.type == TokenType::END_OF_FILE) {
                     break;
                 }
@@ -414,9 +570,27 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
             pos++;
             auto node = std::make_shared<IfNode>();
 
-            // Parse first condition
+            // Parse first condition - can be IDENTIFIER or built-in token
             Condition cond;
-            cond.varName = expectIdentifier(tokens, pos);
+            const Token& condTok = peek(tokens, pos);
+            if (condTok.type == TokenType::HEIGHTABOVE) {
+                cond.varName = "dsl_heightAbove";
+                pos++;
+            } else if (condTok.type == TokenType::HEIGHTBELOW) {
+                cond.varName = "dsl_heightBelow";
+                pos++;
+            } else if (condTok.type == TokenType::NEARBY) {
+                cond.varName = "dsl_nearby";
+                pos++;
+            } else if (condTok.type == TokenType::HOT) {
+                cond.varName = "dsl_hot";
+                pos++;
+            } else if (condTok.type == TokenType::COLD) {
+                cond.varName = "dsl_cold";
+                pos++;
+            } else {
+                cond.varName = expectIdentifier(tokens, pos);
+            }
 
             // Parse operator
             const Token& opTok = peek(tokens, pos);
@@ -425,27 +599,55 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
                 opTok.type == TokenType::EQUAL) {
                 cond.op = opTok.type;
                 pos++;
+                cond.value = expectNumber(tokens, pos);
             } else {
-                throw std::runtime_error("DSL Parser: Expected operator (LESSTHAN/GREATERTHAN/EQUAL)");
+                if (cond.varName == "dsl_hot" || cond.varName == "dsl_cold" || cond.varName == "dsl_nearby") {
+                    cond.op = TokenType::GREATERTHAN;
+                    cond.value = 0;
+                } else {
+                    throw std::runtime_error("DSL Parser: Expected operator (LESSTHAN/GREATERTHAN/EQUAL)");
+                }
             }
-            cond.value = expectNumber(tokens, pos);
             node->conditions.push_back(cond);
 
             // Parse AND chains
             while (match(tokens, pos, TokenType::AND)) {
                 pos++; // consume AND
                 Condition andCond;
-                andCond.varName = expectIdentifier(tokens, pos);
+                const Token& andCondTok = peek(tokens, pos);
+                if (andCondTok.type == TokenType::HEIGHTABOVE) {
+                    andCond.varName = "dsl_heightAbove";
+                    pos++;
+                } else if (andCondTok.type == TokenType::HEIGHTBELOW) {
+                    andCond.varName = "dsl_heightBelow";
+                    pos++;
+                } else if (andCondTok.type == TokenType::NEARBY) {
+                    andCond.varName = "dsl_nearby";
+                    pos++;
+                } else if (andCondTok.type == TokenType::HOT) {
+                    andCond.varName = "dsl_hot";
+                    pos++;
+                } else if (andCondTok.type == TokenType::COLD) {
+                    andCond.varName = "dsl_cold";
+                    pos++;
+                } else {
+                    andCond.varName = expectIdentifier(tokens, pos);
+                }
                 const Token& andOp = peek(tokens, pos);
                 if (andOp.type == TokenType::LESSTHAN ||
                     andOp.type == TokenType::GREATERTHAN ||
                     andOp.type == TokenType::EQUAL) {
                     andCond.op = andOp.type;
                     pos++;
+                    andCond.value = expectNumber(tokens, pos);
                 } else {
-                    throw std::runtime_error("DSL Parser: Expected operator after AND");
+                    if (andCond.varName == "dsl_hot" || andCond.varName == "dsl_cold" || andCond.varName == "dsl_nearby") {
+                        andCond.op = TokenType::GREATERTHAN;
+                        andCond.value = 0;
+                    } else {
+                        throw std::runtime_error("DSL Parser: Expected operator after AND");
+                    }
                 }
-                andCond.value = expectNumber(tokens, pos);
                 node->conditions.push_back(andCond);
             }
 
@@ -455,6 +657,7 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
                 if (next.type == TokenType::INTERACT ||
                     next.type == TokenType::IF ||
                     next.type == TokenType::DEFINE ||
+                    next.type == TokenType::SWARM ||
                     next.type == TokenType::END_OF_FILE) {
                     break;
                 }
@@ -463,7 +666,7 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
             return node;
         }
         default:
-            // Try parsing as a standalone action (TURN, CREATE, ROLL, etc.)
+            // Try parsing as a standalone action (TURN, CREATE, ROLL, SWARM, etc.)
             return parseAction(tokens, pos);
     }
 }
@@ -627,6 +830,52 @@ std::string DSLCompiler::emitGLSL() const {
     glsl << "    bool emitHeat = false;\n";
     glsl << "    bool emitCold = false;\n\n";
 
+    // Built-in readable values
+    std::vector<std::string> hotElements;
+    std::vector<std::string> coldElements;
+    for (const auto& script : scripts) {
+        bool isHot = false, isCold = false;
+        for (const auto& node : script.rootNodes) {
+            findMakesNodes(node, isHot, isCold);
+        }
+        std::string upper = script.elementName;
+        std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
+        if (isHot) hotElements.push_back(upper);
+        if (isCold) coldElements.push_back(upper);
+    }
+
+    // Built-in readable values
+    glsl << "    // Built-in readable values\n";
+    glsl << "    uint dsl_heightAbove = uint(int(worldSize.y) - pos.y);\n";
+    glsl << "    uint dsl_heightBelow = uint(pos.y);\n";
+    glsl << "    uint dsl_nearby = 0u;\n";
+    glsl << "    uint dsl_hot = 0u;\n";
+    glsl << "    uint dsl_cold = 0u;\n";
+    glsl << "    for (int ny_ = -1; ny_ <= 1; ny_++) {\n";
+    glsl << "        for (int nx_ = -1; nx_ <= 1; nx_++) {\n";
+    glsl << "            if (nx_ == 0 && ny_ == 0) continue;\n";
+    glsl << "            if (inBounds(pos + ivec2(nx_, ny_))) {\n";
+    glsl << "                uint ne = getElement(pos + ivec2(nx_, ny_));\n";
+    glsl << "                if (ne == elem) dsl_nearby++;\n";
+    if (!hotElements.empty()) {
+        glsl << "                if (";
+        for (size_t i = 0; i < hotElements.size(); i++) {
+            glsl << "ne == " << hotElements[i] << (i + 1 == hotElements.size() ? "" : " || ");
+        }
+        glsl << ") dsl_hot++;\n";
+    }
+    if (!coldElements.empty()) {
+        glsl << "                if (";
+        for (size_t i = 0; i < coldElements.size(); i++) {
+            glsl << "ne == " << coldElements[i] << (i + 1 == coldElements.size() ? "" : " || ");
+        }
+        glsl << ") dsl_cold++;\n";
+    }
+    glsl << "            }\n";
+    glsl << "        }\n";
+    glsl << "    }\n\n";
+
+    // OPEN THE SWITCH STATEMENT HERE
     glsl << "    switch (elem) {\n";
 
     for (const auto& script : scripts) {
@@ -646,6 +895,12 @@ std::string DSLCompiler::emitGLSL() const {
         for (const auto& node : script.rootNodes) {
             // Skip DEFINE nodes (handled above as initialization)
             if (std::dynamic_pointer_cast<DefineNode>(node)) continue;
+
+            // SwarmNode can be at top-level
+            if (auto swarmNode = std::dynamic_pointer_cast<SwarmNode>(node)) {
+                glsl << swarmNode->generateGLSL("            ");
+                continue;
+            }
 
             // For SET/ADD nodes, we need to post-process the GLSL to replace
             // variable references with proper bit-pack operations

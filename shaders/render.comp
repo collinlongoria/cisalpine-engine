@@ -386,14 +386,18 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
         return vec4(clamp(steamColor, 0.0, 1.0), alpha);
     }
 
-    // CLOUD - puffy white/gray
+    // CLOUD - puffy white/gray, darkens based on darkLevel (B channel) and altitude
     if (element == CLOUD) {
         float lifeFactor = float(life) / 255.0;
+        uint darkLevel = 0;
         float puff = sin(time * 0.5 + float(pos.x) * 0.2) * 0.03;
         float puff2 = cos(time * 0.3 + float(pos.y) * 0.15) * 0.02;
         vec3 cloudColor = vec3(0.88 + puff, 0.90 + puff2, 0.94);
         cloudColor += (variation - 0.5) * 0.05;
-        // Darken slightly as life decreases (rain clouds)
+        // Darken based on darkLevel stored in B channel
+        float darkFactor = float(darkLevel) / 5.0;
+        cloudColor *= mix(1.0, 0.35, clamp(darkFactor, 0.0, 1.0));
+        // Also darken as life decreases
         cloudColor *= 0.7 + lifeFactor * 0.3;
         float alpha = 0.5 + lifeFactor * 0.3;
         return vec4(clamp(cloudColor, 0.0, 1.0), alpha);
@@ -409,39 +413,13 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
         return vec4(clamp(iceColor, 0.0, 1.0), 0.9);
     }
 
-    // LIQUID NITROGEN - cold blue with frost vapor
-    if (element == LIQUIDNITROGEN) {
-        float frost = sin(time * 3.0 + float(pos.x) * 0.7 + float(pos.y) * 0.5) * 0.08;
-        vec3 lnColor = vec3(0.65 + frost, 0.82 + frost * 0.5, 1.0);
-        lnColor += (variation - 0.5) * 0.08;
-        float vapor = pow(max(sin(time * 5.0 + variation * 12.0), 0.0), 6.0) * 0.1;
-        lnColor += vapor;
-        return vec4(clamp(lnColor, 0.0, 1.0), 0.6);
-    }
+    // (Liquid Nitrogen removed)
 
-    // DRY ICE - frosty white with sublimation shimmer
-    if (element == DRYICE) {
-        float sublimate = sin(time * 2.0 + float(pos.x) * 0.4 + float(pos.y) * 0.3) * 0.04;
-        vec3 diColor = vec3(0.85 + sublimate, 0.90 + sublimate * 0.5, 0.95);
-        diColor += (variation - 0.5) * 0.06;
-        return vec4(clamp(diColor, 0.0, 1.0), 0.9);
-    }
+    // (Dry Ice removed)
 
-    // MOLTEN IRON - intense orange-white glow
-    if (element == MOLTENIRON) {
-        float flicker = sin(time * 8.0 + variation * 8.0) * 0.5 + 0.5;
-        vec3 miColor = vec3(1.0, 0.55 + flicker * 0.15, 0.1);
-        miColor += (variation - 0.5) * 0.1;
-        return vec4(clamp(miColor, 0.0, 1.0), 1.0);
-    }
+    // (Molten Iron removed)
 
-    // FUSER - pulsing golden glow
-    if (element == FUSER) {
-        float pulse = sin(time * 4.0 + variation * 6.28) * 0.15 + 0.85;
-        vec3 fuserColor = vec3(1.0, 0.85, 0.0) * pulse;
-        fuserColor += (variation - 0.5) * 0.05;
-        return vec4(clamp(fuserColor, 0.0, 1.0), 1.0);
-    }
+    // (Fuser removed)
 
     // RAINBOW NEON - cycles through color spectrum
     if (anim == ANIM_RAINBOW) {
@@ -450,6 +428,50 @@ vec4 getColor(uint element, uint life, ivec2 pos, ivec2 size) {
         float pulse = sin(time * 3.0 + variation * 6.28) * 0.1 + 0.9;
         rainbowColor *= pulse;
         return vec4(clamp(rainbowColor, 0.0, 1.0), 1.0);
+    }
+
+    // SNOW - sparkly white crystals with frosty shimmer
+    if (element == SNOW) {
+        float shimmer = sin(time * 2.5 + float(pos.x) * 0.8 + float(pos.y) * 0.6) * 0.04;
+        vec3 snowColor = vec3(0.92 + shimmer, 0.95 + shimmer * 0.5, 1.0);
+        snowColor += (variation - 0.5) * 0.04;
+        float sparkle = pow(max(sin(time * 5.0 + variation * 18.0), 0.0), 16.0) * 0.2;
+        snowColor += sparkle;
+        return vec4(clamp(snowColor, 0.0, 1.0), 0.85);
+    }
+
+    // METAL - brushed steel look with subtle directional sheen
+    if (element == METAL) {
+        float sheen = sin(float(pos.x) * 0.4 + float(pos.y) * 0.2) * 0.04;
+        vec3 metalColor = vec3(0.58 + sheen, 0.60 + sheen, 0.63 + sheen);
+        metalColor += (variation - 0.5) * 0.06;
+        float glint = pow(max(sin(time * 1.0 + variation * 12.0), 0.0), 16.0) * 0.08;
+        metalColor += glint;
+        return vec4(clamp(metalColor, 0.0, 1.0), 1.0);
+    }
+
+    // SLAG - glowing molten metal, orange-red with dark crust
+    if (element == SLAG) {
+        float flicker = sin(time * 6.0 + variation * 7.0) * 0.5 + 0.5;
+        vec3 slagColor = vec3(0.85, 0.35 + flicker * 0.15, 0.08);
+        slagColor += (variation - 0.5) * 0.1;
+        // Dark surface crust patches
+        if (variation > 0.75) {
+            slagColor *= 0.5;
+        }
+        return vec4(clamp(slagColor, 0.0, 1.0), 1.0);
+    }
+
+    // LOCUSTS - small dark bodies with wing shimmer
+    if (element == LOCUSTS) {
+        float wing = sin(time * 20.0 + variation * 30.0) * 0.5 + 0.5;
+        vec3 locustColor = vec3(0.22, 0.28, 0.12);
+        locustColor += (variation - 0.5) * 0.1;
+        // Wing glint
+        float wingGlint = pow(wing, 4.0) * 0.15;
+        locustColor.g += wingGlint;
+        locustColor.r += wingGlint * 0.3;
+        return vec4(clamp(locustColor, 0.0, 1.0), 0.9);
     }
 
     // Grass
