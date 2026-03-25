@@ -129,19 +129,26 @@ void main() {
 
         // FAN LOGIC
         else if (eff.type >= 2u && eff.type <= 5u) {
-            // Directional fan force
-            float fanRadius = 20.0;
-            if (dist < fanRadius) {
-                float falloff = 1.0 - (dist / fanRadius);
-                falloff = falloff * falloff;  // Quadratic falloff
-                float strength = eff.strength * falloff;
+            float fanLength = 125.0;  // how far the beam reaches
+            float fanWidth  = 3.0;   // half-width of the beam (perpendicular spread)
 
-                vec2 dir;
-                if      (eff.type == 2u) dir = vec2(-1.0, 0.0);  // Left
-                else if (eff.type == 3u) dir = vec2( 1.0, 0.0);  // Right
-                else if (eff.type == 4u) dir = vec2( 0.0, 1.0);  // Up
-                else                     dir = vec2( 0.0,-1.0);  // Down
+            vec2 dir;
+            if      (eff.type == 2u) dir = vec2(-1.0, 0.0);  // Left
+            else if (eff.type == 3u) dir = vec2( 1.0, 0.0);  // Right
+            else if (eff.type == 4u) dir = vec2( 0.0, 1.0);  // Up
+            else                     dir = vec2( 0.0,-1.0);  // Down
 
+            // Project the offset onto the fan direction
+            vec2 offset = vec2(pos) - eff.position;
+            float along = dot(offset, dir);        // distance along beam
+            float perp  = abs(dot(offset, vec2(-dir.y, dir.x)));  // perpendicular distance
+
+            // Only affect cells in front of the fan, within the beam width
+            if (along > 0.0 && along < fanLength && perp < fanWidth) {
+                float falloff = 1.0 - (along / fanLength);
+                falloff *= 1.0 - (perp / fanWidth);  // fade at edges
+                falloff = max(falloff, 0.0);
+                float strength = eff.strength * falloff * falloff;
                 force += dir * strength;
             }
         }
@@ -152,7 +159,7 @@ void main() {
         int type = elements[elem].type;
         // Static elements absorb some force but not all
         if (type == 0 && elem != VOID && elem != BLACKHOLE) {
-            force *= 0.4;
+            force = vec2(0.0);
         }
     }
 
