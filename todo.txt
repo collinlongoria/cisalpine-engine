@@ -1,10 +1,10 @@
 Engine Features:
-- Element scripting (with shader injection)
 - Improved item selection window w/ search
-- General UI improvements
+- Nicer UI theme
 - Web build (emscripten, webgl/wgpu?)
 
 Simulation Features:
+- Generic grower with scripting impl
 
 Rendering Features:
 
@@ -13,24 +13,18 @@ Elements:
 - Bee & Honeycomb
 - Objects (loaded in via sprites in assets folder)
 - Duplicator
-- Fan (should be able to change direction)
 - Lightning
 - Wire
 - Battery (just provides electricity)
 - Electricity
-- Metal < depending on amount of implemented behavior data, can extend to different metals
+- Metal
+- Powder Lighting
+- Fireflies
+- Acid
+- Gas
 
 Known issues:
 - Dragging mouse does not behave properly
-- Needs improvement for handling elements inside the lighting and simulation
-^ need a fix for scripting interactions, more data driven and less type checks
+- Tree leaves dissapear
 
 Optimizations:
-
--- COMPLETED --
-- Compute/Rendering pipeline debug info
-- Need to implement a chunking system that marks chunks as awake or alseep. Then use glComputeIndirect
-- Debug views & OpenGL timer queries
-- Radiance Cascades for lighting
-- Ice
-- Cloud
