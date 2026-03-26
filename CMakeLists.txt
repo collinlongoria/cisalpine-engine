@@ -4,19 +4,35 @@ project(cisalpine)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
-# GLFW options
+if(MSVC)
+    set(CMAKE_CXX_FLAGS_RELEASE "/O2 /Ob3 /GL /DNDEBUG")
+    set(CMAKE_C_FLAGS_RELEASE   "/O2 /Ob3 /GL /DNDEBUG")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "/LTCG /OPT:REF /OPT:ICF")
+    set(CMAKE_CXX_FLAGS_RELWITHDEBINFO "/O2 /Ob2 /GL /Zi /DNDEBUG")
+    set(CMAKE_EXE_LINKER_FLAGS_RELWITHDEBINFO "/LTCG /DEBUG /OPT:REF /OPT:ICF")
+    add_compile_options(/fp:fast)
+    add_compile_options(/arch:AVX2)
+    add_compile_options(/wd4005)
+    add_compile_options(/MP)
+
+else()
+    # GCC / Clang
+    set(CMAKE_CXX_FLAGS_RELEASE "-O3 -DNDEBUG -flto")
+    set(CMAKE_C_FLAGS_RELEASE   "-O3 -DNDEBUG -flto")
+    set(CMAKE_EXE_LINKER_FLAGS_RELEASE "-flto")
+
+    add_compile_options(-ffast-math -march=native)
+endif()
+
+# GLFW
 set(GLFW_BUILD_DOCS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_TESTS OFF CACHE BOOL "" FORCE)
 set(GLFW_BUILD_EXAMPLES OFF CACHE BOOL "" FORCE)
 add_subdirectory(external/glfw)
 
 # GLAD
-add_library(glad STATIC
-        external/glad/src/glad.c
-)
-target_include_directories(glad PUBLIC
-        external/glad/include
-)
+add_library(glad STATIC external/glad/src/glad.c)
+target_include_directories(glad PUBLIC external/glad/include)
 
 # GLM
 add_subdirectory(external/glm)
@@ -47,7 +63,6 @@ target_include_directories(nlohmann_json INTERFACE
         ${CMAKE_SOURCE_DIR}/external/json/single_include
 )
 
-# Executable
 add_executable(CisalpineEngine
         src/main.cpp
         src/app.cpp
@@ -58,7 +73,7 @@ add_executable(CisalpineEngine
 target_include_directories(CisalpineEngine PRIVATE include)
 target_link_libraries(CisalpineEngine PRIVATE glfw glad imgui stb glm nlohmann_json)
 
-# OpenGl Linking
+# OpenGL
 find_package(OpenGL REQUIRED)
 target_link_libraries(CisalpineEngine PRIVATE OpenGL::GL)
 
