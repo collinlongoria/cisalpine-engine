@@ -27,8 +27,6 @@
 
 namespace cisalpine {
 
-// GPU struct - DSL cleanup: removed flammability, probability, maxLife
-// These are now handled by the DSL script system via custom data bits.
 struct GPUElementData {
     glm::vec4 color;            // 16 bytes (offset 0)
     int type;                   // 4 bytes  (offset 16)
@@ -41,7 +39,7 @@ struct GPUElementData {
     float ior;                  // 4 bytes  (offset 44)
     float opacity;              // 4 bytes  (offset 48)
     float specularPower;        // 4 bytes  (offset 52)
-    int _pad1, _pad2;           // 8 bytes  (offset 56) - Padding for vec4 alignment
+    int _pad1, _pad2;           // 8 bytes  (offset 56)
     glm::vec4 transmissionTint; // 16 bytes (offset 64)
     float baseHeight;           // 4 bytes  (offset 80)
     float colorVariation;       // 4 bytes  (offset 84)
@@ -74,11 +72,9 @@ public:
     // Single-click flag for UI input handling
     bool isSingleClick(int id) const;
 
-    // Hidden flag - elements like WoodTip/LeafTip that shouldn't appear in UI
     bool isHidden(int id) const;
 
-    // Max life for brush initialization (255 for Fire, 0 for most elements)
-    // Note: Still needed for brush initialization even though maxLife is removed from GPU struct
+    // Max life for brush initialization
     int getMaxLife(int id) const;
 
     // Get the DSL compiler for custom data initialization
@@ -88,9 +84,9 @@ private:
     std::vector<GPUElementData> gpuData;
     std::vector<std::string> names;
     std::map<std::string, int> nameToId;
-    std::vector<bool> singleClickFlags; // CPU-side only, not on GPU
-    std::vector<bool> hiddenFlags;      // CPU-side only, not on GPU
-    std::vector<int> maxLifeValues;     // CPU-side only (for brush init), removed from GPU
+    std::vector<bool> singleClickFlags;
+    std::vector<bool> hiddenFlags;
+    std::vector<int> maxLifeValues;
     GLuint ssbo = 0;
 
     // DSL Compiler

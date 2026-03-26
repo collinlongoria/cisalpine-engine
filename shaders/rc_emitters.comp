@@ -64,7 +64,7 @@ void main() {
         int anim = elements[elem].animType;
 
         // Light element
-        if (elem == LIGHT) {
+        if (elem == LIGHT || elem == POWDERLIGHT) {
             float intensity = elements[elem].lightIntensity;
             if (intensity <= 0.0) intensity = 3.5;
             emission = vec3(1.0, 0.98, 0.9) * intensity;

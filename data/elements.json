@@ -234,6 +234,26 @@
     ],
     "colorVariation": 0.02
   },
+  "PowderLight": {
+    "type": "Granular",
+    "color": [
+      1.0,
+      1.0,
+      0.95,
+      1.0
+    ],
+    "density": 0,
+    "glow": true,
+    "lightRadius": 20,
+    "lightIntensity": 1.5,
+    "transmissionTint": [
+      1.0,
+      1.0,
+      0.95,
+      1.0
+    ],
+    "colorVariation": 0.02
+  },
   "RedLight": {
     "type": "Static",
     "color": [
