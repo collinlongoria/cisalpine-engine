@@ -17,9 +17,27 @@
 #include <cstring>
 #include <algorithm>
 #include <cctype>
+#include <fstream>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
+
+// Platform file dialog
+#ifdef _WIN32
+  #ifndef NOMINMAX
+    #define NOMINMAX
+  #endif
+  #include <windows.h>
+  #include <commdlg.h>
+  #define GLFW_EXPOSE_NATIVE_WIN32
+  #include <GLFW/glfw3native.h>
+#elif defined(__linux__)
+  #include <cstdlib>
+  #include <array>
+#elif defined(__APPLE__)
+  #include <cstdlib>
+  #include <array>
+#endif
 
 
 namespace cisalpine {
@@ -303,9 +321,37 @@ void App::init(int worldW, int worldH) {
 
     // Create world
     world = std::make_unique<World>(worldWidth, worldHeight);
-    if (!world->init(header, dslCode)) {
+
+    // Init world with progress callback that renders loading screen
+    auto progressCallback = [this](const char* stage, float progress) {
+        loadingStage = stage;
+        loadingProgress = progress;
+
+        // Render a loading frame
+        glfwPollEvents();
+
+        int displayW, displayH;
+        glfwGetFramebufferSize(window, &displayW, &displayH);
+        glViewport(0, 0, displayW, displayH);
+        glClearColor(0.08f, 0.08f, 0.10f, 1.0f);
+        glClear(GL_COLOR_BUFFER_BIT);
+
+        ImGui_ImplOpenGL3_NewFrame();
+        ImGui_ImplGlfw_NewFrame();
+        ImGui::NewFrame();
+
+        renderLoadingScreen();
+
+        ImGui::Render();
+        ImGui_ImplOpenGL3_RenderDrawData(ImGui::GetDrawData());
+        glfwSwapBuffers(window);
+    };
+
+    if (!world->init(header, dslCode, progressCallback)) {
         throw std::runtime_error("Failed to initialize world");
     }
+
+    isLoading = false;
 
     // Bind registry SSBO
     registry.bindSSBO(2);
@@ -995,6 +1041,23 @@ void App::renderUI() {
         world->clear();
     }
 
+    // Save/Load
+    if (ImGui::Button("Save Level", ImVec2(-1, 0))) {
+        saveLevel();
+    }
+    if (ImGui::Button("Load Level", ImVec2(-1, 0))) {
+        loadLevel();
+    }
+
+    // Status message
+    if (statusMessageTimer > 0.0f) {
+        ImVec4 msgColor = (statusMessage.find("Error") != std::string::npos ||
+                           statusMessage.find("Failed") != std::string::npos)
+            ? ImVec4(1.0f, 0.4f, 0.4f, statusMessageTimer / 3.0f)
+            : ImVec4(0.4f, 1.0f, 0.4f, statusMessageTimer / 3.0f);
+        ImGui::TextColored(msgColor, "%s", statusMessage.c_str());
+    }
+
     if (ImGui::Button("Settings", ImVec2(-1, 0))) {
         settingsOpen = true;
     }
@@ -1020,6 +1083,185 @@ void App::renderUI() {
     ImGui::End();
 }
 
+void App::renderLoadingScreen() {
+    int windowWidth, windowHeight;
+    glfwGetWindowSize(window, &windowWidth, &windowHeight);
+
+    ImGui::SetNextWindowPos(ImVec2(0, 0));
+    ImGui::SetNextWindowSize(ImVec2(static_cast<float>(windowWidth),
+                                     static_cast<float>(windowHeight)));
+
+    ImGuiWindowFlags flags = ImGuiWindowFlags_NoMove |
+                              ImGuiWindowFlags_NoResize |
+                              ImGuiWindowFlags_NoCollapse |
+                              ImGuiWindowFlags_NoTitleBar |
+                              ImGuiWindowFlags_NoScrollbar;
+
+    ImGui::PushStyleColor(ImGuiCol_WindowBg, ImVec4(0.08f, 0.08f, 0.10f, 1.0f));
+    ImGui::Begin("##LoadingScreen", nullptr, flags);
+    ImGui::PopStyleColor();
+
+    // Center content vertically and horizontally
+    float contentWidth = 360.0f;
+    float centerX = (static_cast<float>(windowWidth) - contentWidth) * 0.5f;
+    float centerY = static_cast<float>(windowHeight) * 0.4f;
+
+    ImGui::SetCursorPos(ImVec2(centerX, centerY));
+    ImGui::BeginChild("##LoadingContent", ImVec2(contentWidth, 120.0f), false);
+
+    // Title
+    float titleWidth = ImGui::CalcTextSize("Cisalpine Engine").x;
+    ImGui::SetCursorPosX((contentWidth - titleWidth) * 0.5f);
+    ImGui::TextColored(ImVec4(0.35f, 0.48f, 0.85f, 1.0f), "Cisalpine Engine");
+    ImGui::Spacing();
+    ImGui::Spacing();
+
+    // Stage text
+    float stageWidth = ImGui::CalcTextSize(loadingStage.c_str()).x;
+    ImGui::SetCursorPosX((contentWidth - stageWidth) * 0.5f);
+    ImGui::TextColored(ImVec4(0.7f, 0.7f, 0.75f, 1.0f), "%s", loadingStage.c_str());
+    ImGui::Spacing();
+
+    // Progress bar
+    ImGui::PushStyleColor(ImGuiCol_PlotHistogram, ImVec4(0.35f, 0.48f, 0.85f, 1.0f));
+    ImGui::PushStyleColor(ImGuiCol_FrameBg, ImVec4(0.12f, 0.12f, 0.15f, 1.0f));
+    ImGui::ProgressBar(loadingProgress, ImVec2(contentWidth, 8.0f), "");
+    ImGui::PopStyleColor(2);
+
+    ImGui::EndChild();
+    ImGui::End();
+}
+
+// Platform file dialog implementations
+std::string App::openFileDialog(bool save) {
+#ifdef _WIN32
+    // Windows native file dialog
+    char filename[MAX_PATH] = "";
+    OPENFILENAMEA ofn = {};
+    ofn.lStructSize = sizeof(ofn);
+    ofn.hwndOwner = glfwGetWin32Window(window);
+    ofn.lpstrFilter = "Cisalpine Level (*.csav)\0*.csav\0All Files (*.*)\0*.*\0";
+    ofn.lpstrFile = filename;
+    ofn.nMaxFile = MAX_PATH;
+    ofn.lpstrDefExt = "csav";
+
+    if (save) {
+        ofn.Flags = OFN_OVERWRITEPROMPT | OFN_NOCHANGEDIR;
+        if (GetSaveFileNameA(&ofn)) {
+            return std::string(filename);
+        }
+    } else {
+        ofn.Flags = OFN_FILEMUSTEXIST | OFN_NOCHANGEDIR;
+        if (GetOpenFileNameA(&ofn)) {
+            return std::string(filename);
+        }
+    }
+    return "";
+
+#elif defined(__linux__)
+    // Linux: try zenity, then kdialog, then fall back to console
+    std::string command;
+    if (save) {
+        command = "zenity --file-selection --save --confirm-overwrite "
+                  "--file-filter='Cisalpine Level (*.csav)|*.csav' "
+                  "--file-filter='All files|*' "
+                  "--filename=level.csav "
+                  "--title='Save Level' 2>/dev/null";
+    } else {
+        command = "zenity --file-selection "
+                  "--file-filter='Cisalpine Level (*.csav)|*.csav' "
+                  "--file-filter='All files|*' "
+                  "--title='Load Level' 2>/dev/null";
+    }
+
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) {
+        // Try kdialog as fallback
+        if (save) {
+            command = "kdialog --getsavefilename . 'Cisalpine Level (*.csav)' 2>/dev/null";
+        } else {
+            command = "kdialog --getopenfilename . 'Cisalpine Level (*.csav)' 2>/dev/null";
+        }
+        pipe = popen(command.c_str(), "r");
+    }
+
+    if (!pipe) {
+        std::cerr << "No file dialog available (install zenity or kdialog)" << std::endl;
+        return "";
+    }
+
+    char buffer[1024];
+    std::string result;
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        result += buffer;
+    }
+    pclose(pipe);
+
+    // Trim trailing newline
+    while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
+        result.pop_back();
+    }
+    return result;
+
+#elif defined(__APPLE__)
+    // macOS: use osascript
+    std::string command;
+    if (save) {
+        command = "osascript -e 'set f to POSIX path of (choose file name with prompt "
+                  "\"Save Level\" default name \"level.csav\")' 2>/dev/null";
+    } else {
+        command = "osascript -e 'set f to POSIX path of (choose file of type {\"csav\"} "
+                  "with prompt \"Load Level\")' 2>/dev/null";
+    }
+
+    FILE* pipe = popen(command.c_str(), "r");
+    if (!pipe) return "";
+
+    char buffer[1024];
+    std::string result;
+    while (fgets(buffer, sizeof(buffer), pipe)) {
+        result += buffer;
+    }
+    pclose(pipe);
+
+    while (!result.empty() && (result.back() == '\n' || result.back() == '\r')) {
+        result.pop_back();
+    }
+    return result;
+#else
+    return "";
+#endif
+}
+
+void App::saveLevel() {
+    std::string filepath = openFileDialog(true);
+    if (filepath.empty()) return;
+
+    // Ensure .csav extension
+    if (filepath.size() < 5 || filepath.substr(filepath.size() - 5) != ".csav") {
+        filepath += ".csav";
+    }
+
+    if (world->saveState(filepath)) {
+        statusMessage = "Level saved!";
+    } else {
+        statusMessage = "Error: Failed to save level";
+    }
+    statusMessageTimer = 3.0f;
+}
+
+void App::loadLevel() {
+    std::string filepath = openFileDialog(false);
+    if (filepath.empty()) return;
+
+    if (world->loadState(filepath)) {
+        statusMessage = "Level loaded!";
+    } else {
+        statusMessage = "Error: Failed to load level (invalid file?)";
+    }
+    statusMessageTimer = 3.0f;
+}
+
 void App::run() {
     while (!glfwWindowShouldClose(window)) {
         glfwPollEvents();
@@ -1030,6 +1272,12 @@ void App::run() {
         lastFrameTime = currentTime;
 
         if (dt > 0.1f) dt = 0.1f;
+
+        // Tick down status message
+        if (statusMessageTimer > 0.0f) {
+            statusMessageTimer -= dt;
+            if (statusMessageTimer < 0.0f) statusMessageTimer = 0.0f;
+        }
 
         handleInput(dt);
 

@@ -171,6 +171,15 @@ private:
     static constexpr float CHUNK_MAP_REFRESH_INTERVAL = 0.1f; // refresh every 100ms
     std::vector<uint32_t> cachedChunkGrid;
 
+    // Loading screen state
+    bool isLoading = true;
+    std::string loadingStage = "Initializing...";
+    float loadingProgress = 0.0f;
+
+    // Save/Load status message
+    std::string statusMessage;
+    float statusMessageTimer = 0.0f;
+
     // Logic
     Registry registry;
     Shader brushShader;
@@ -184,9 +193,15 @@ private:
     void renderUI();
     void renderSettingsWindow();
     void renderDebugOverlay(float dt);
+    void renderLoadingScreen();
     void renderElementButtons(const std::vector<std::string>& names, float availWidth);
     bool elementMatchesTab(int id, ElementTab tab) const;
     bool elementMatchesSearch(const std::string& name) const;
+
+    // Save/Load
+    void saveLevel();
+    void loadLevel();
+    std::string openFileDialog(bool save);  // Platform file dialog
 
     // Convert screen coords to world coords
     bool screenToWorld(double screenX, double screenY, int& worldX, int& worldY);

@@ -150,7 +150,7 @@
     ],
     "density": 12,
     "colorVariation": 0.12,
-    "script": "INTERACT Seed TURN Grass\nINTERACT Grass ROLL 2 TURN Grass\nINTERACT Acid ROLL 12 TURN Empty"
+    "script": "INTERACT Seed TURN Grass\nINTERACT Grass ROLL 6 TURN Grass\nINTERACT Acid ROLL 12 TURN Empty"
   },
   "Seed": {
     "type": "Granular",
@@ -163,7 +163,7 @@
     "density": 8,
     "singleClick": true,
     "colorVariation": 0.1,
-    "script": "INTERACT Fire ROLL 30 TURN Fire\nINTERACT Lava ROLL 30 TURN Fire"
+    "script": "INTERACT Dirt TURN Grass\nINTERACT Grass TURN Grass\nINTERACT Fire ROLL 30 TURN Fire\nINTERACT Lava ROLL 30 TURN Fire"
   },
   "Grass": {
     "type": "Granular",
@@ -597,7 +597,8 @@
       1.0
     ],
     "baseHeight": 0.05,
-    "colorVariation": 0.06
+    "colorVariation": 0.06,
+    "script": "IF c_nearby GREATERTHAN 5 ROLL 8 TURN Cloud"
   },
   "Cloud": {
     "type": "Static",

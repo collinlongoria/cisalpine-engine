@@ -17,6 +17,7 @@
 #include <array>
 #include <string>
 #include <vector>
+#include <functional>
 
 #include "shader.hpp"
 #include <glm/glm.hpp>
@@ -210,12 +211,20 @@ public:
     World(const World&) = delete;
     World& operator=(const World&) = delete;
 
-    bool init(const std::string& shaderHeader, const std::string& dslCode = "");
+    // Progress callback for loading screen: (stageName, progress 0.0-1.0)
+    using ProgressCallback = std::function<void(const char* stage, float progress)>;
+
+    bool init(const std::string& shaderHeader, const std::string& dslCode = "",
+              ProgressCallback progressCb = nullptr);
     void update(float dt);
     void render(int screenX, int screenY, int screenWidth, int screenHeight,
         float camX, float camY, float camZoom, DebugViewMode viewMode = DebugViewMode::Final);
 
     void clear();
+
+    // Save/Load level data
+    bool saveState(const std::string& filepath) const;
+    bool loadState(const std::string& filepath);
 
     int width() const { return worldWidth; }
     int height() const { return worldHeight; }

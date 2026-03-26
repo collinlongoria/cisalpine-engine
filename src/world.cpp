@@ -16,8 +16,10 @@
 
 #include "world.hpp"
 #include <iostream>
+#include <fstream>
 #include <vector>
 #include <cmath>
+#include <cstring>
 
 namespace cisalpine {
 
@@ -50,7 +52,14 @@ World::~World() {
     }
 }
 
-bool World::init(const std::string& shaderHeader, const std::string& dslCode) {
+bool World::init(const std::string& shaderHeader, const std::string& dslCode,
+                 ProgressCallback progressCb) {
+    auto report = [&](const char* stage, float progress) {
+        if (progressCb) progressCb(stage, progress);
+    };
+
+    report("Preparing shader headers...", 0.0f);
+
     // Build augmented shader header with chunk, RC, and effector constants
     std::string fullHeader = shaderHeader;
     fullHeader += "#define CHUNK_SIZE " + std::to_string(CHUNK_SIZE) + "\n";
@@ -63,45 +72,56 @@ bool World::init(const std::string& shaderHeader, const std::string& dslCode) {
     fullHeader += "\n";
 
     // Load shaders
+    report("Compiling simulation shader...", 0.05f);
     if (!simulationShader.loadCompute("shaders/simulation.comp", fullHeader, dslCode)) {
         std::cerr << "Failed to load simulation shader" << std::endl;
         return false;
     }
+    report("Compiling physics shader...", 0.15f);
     if (!forceUpdateShader.loadCompute("shaders/physics.comp", fullHeader)) {
         std::cerr << "Failed to load physics shader" << std::endl;
         return false;
     }
+    report("Compiling render shader...", 0.25f);
     if (!renderShader.loadCompute("shaders/render.comp", fullHeader)) {
         std::cerr << "Failed to load render shader" << std::endl;
         return false;
     }
 
     // === Radiance Cascade shaders (replaces lighting.comp) ===
+    report("Compiling radiance cascade shaders...", 0.35f);
     if (!rcEmitterShader.loadCompute("shaders/rc_emitters.comp", fullHeader)) {
         std::cerr << "Failed to load RC emitter shader" << std::endl;
         return false;
     }
+    report("Compiling cascade merge shader...", 0.45f);
     if (!rcCascadeShader.loadCompute("shaders/rc_cascade.comp", fullHeader)) {
         std::cerr << "Failed to load RC cascade shader" << std::endl;
         return false;
     }
+    report("Compiling cascade resolve shader...", 0.55f);
     if (!rcResolveShader.loadCompute("shaders/rc_resolve.comp", fullHeader)) {
         std::cerr << "Failed to load RC resolve shader" << std::endl;
         return false;
     }
 
+    report("Compiling composite shader...", 0.60f);
     if (!compositeShader.loadCompute("shaders/composite.comp", fullHeader)) {
         std::cerr << "Failed to load composite shader" << std::endl;
         return false;
     }
+    report("Loading quad shader...", 0.70f);
     if (!quadShader.loadFromFile("shaders/quad.vert", "shaders/quad.frag")) {
         std::cerr << "Failed to load quad shader" << std::endl;
         return false;
     }
+    report("Compiling chunk build shader...", 0.75f);
     if (!chunkBuildShader.loadCompute("shaders/chunk_build.comp", fullHeader)) {
         std::cerr << "Failed to load chunk build shader" << std::endl;
         return false;
     }
+
+    report("Creating GPU buffers...", 0.85f);
 
     createTextures();
     createQuad();
@@ -127,6 +147,8 @@ bool World::init(const std::string& shaderHeader, const std::string& dslCode) {
 
     std::cout << "Effector buffer initialized: capacity " << MAX_EFFECTORS << " effectors" << std::endl;
     std::cout << "Temperature system initialized: double-buffered R16F textures" << std::endl;
+
+    report("Ready!", 1.0f);
 
     return true;
 }
@@ -449,6 +471,171 @@ void World::clear() {
 
     glBindTexture(GL_TEXTURE_2D, 0);
     wakeAllChunks();
+}
+
+// Save/Load Level
+
+// File format:
+//   Magic:   "CSAV" (4 bytes)
+//   Version: uint32_t (currently 1)
+//   Width:   uint32_t
+//   Height:  uint32_t
+//   Data:    RLE-compressed RGBA8UI pixel data
+//
+//   RLE encoding: for each run:
+//     uint16_t runLength (1-65535)
+//     uint8_t  R, G, B, A
+//   A run length of 0 signals end-of-data.
+
+static constexpr char LEVEL_MAGIC[4] = {'C', 'S', 'A', 'V'};
+static constexpr uint32_t LEVEL_VERSION = 1;
+
+bool World::saveState(const std::string& filepath) const {
+    // Read back current state texture from GPU
+    size_t pixelCount = static_cast<size_t>(worldWidth) * worldHeight;
+    std::vector<uint8_t> pixels(pixelCount * 4);
+
+    glBindTexture(GL_TEXTURE_2D, stateTextures[currentBuffer]);
+    glGetTexImage(GL_TEXTURE_2D, 0, GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, pixels.data());
+    glBindTexture(GL_TEXTURE_2D, 0);
+
+    std::ofstream file(filepath, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file for saving: " << filepath << std::endl;
+        return false;
+    }
+
+    // Write header
+    file.write(LEVEL_MAGIC, 4);
+    uint32_t version = LEVEL_VERSION;
+    uint32_t w = static_cast<uint32_t>(worldWidth);
+    uint32_t h = static_cast<uint32_t>(worldHeight);
+    file.write(reinterpret_cast<const char*>(&version), 4);
+    file.write(reinterpret_cast<const char*>(&w), 4);
+    file.write(reinterpret_cast<const char*>(&h), 4);
+
+    // RLE encode: group consecutive identical RGBA quads
+    size_t i = 0;
+    while (i < pixelCount) {
+        uint8_t r = pixels[i * 4 + 0];
+        uint8_t g = pixels[i * 4 + 1];
+        uint8_t b = pixels[i * 4 + 2];
+        uint8_t a = pixels[i * 4 + 3];
+
+        uint16_t runLen = 1;
+        while (i + runLen < pixelCount && runLen < 65535) {
+            size_t j = (i + runLen) * 4;
+            if (pixels[j] == r && pixels[j + 1] == g &&
+                pixels[j + 2] == b && pixels[j + 3] == a) {
+                runLen++;
+            } else {
+                break;
+            }
+        }
+
+        file.write(reinterpret_cast<const char*>(&runLen), 2);
+        file.write(reinterpret_cast<const char*>(&r), 1);
+        file.write(reinterpret_cast<const char*>(&g), 1);
+        file.write(reinterpret_cast<const char*>(&b), 1);
+        file.write(reinterpret_cast<const char*>(&a), 1);
+
+        i += runLen;
+    }
+
+    // End-of-data marker
+    uint16_t endMarker = 0;
+    file.write(reinterpret_cast<const char*>(&endMarker), 2);
+
+    file.close();
+    std::cout << "Level saved to: " << filepath << std::endl;
+    return true;
+}
+
+bool World::loadState(const std::string& filepath) {
+    std::ifstream file(filepath, std::ios::binary);
+    if (!file.is_open()) {
+        std::cerr << "Failed to open file for loading: " << filepath << std::endl;
+        return false;
+    }
+
+    // Read and validate magic
+    char magic[4];
+    file.read(magic, 4);
+    if (std::memcmp(magic, LEVEL_MAGIC, 4) != 0) {
+        std::cerr << "Invalid level file (bad magic number): " << filepath << std::endl;
+        return false;
+    }
+
+    // Read header
+    uint32_t version, w, h;
+    file.read(reinterpret_cast<char*>(&version), 4);
+    file.read(reinterpret_cast<char*>(&w), 4);
+    file.read(reinterpret_cast<char*>(&h), 4);
+
+    if (version != LEVEL_VERSION) {
+        std::cerr << "Unsupported level file version: " << version << std::endl;
+        return false;
+    }
+
+    if (static_cast<int>(w) != worldWidth || static_cast<int>(h) != worldHeight) {
+        std::cerr << "Level size mismatch: file is " << w << "x" << h
+                  << " but world is " << worldWidth << "x" << worldHeight << std::endl;
+        return false;
+    }
+
+    // RLE decode
+    size_t pixelCount = static_cast<size_t>(worldWidth) * worldHeight;
+    std::vector<uint8_t> pixels(pixelCount * 4, 0);
+
+    size_t pixelsWritten = 0;
+    while (file.good() && pixelsWritten < pixelCount) {
+        uint16_t runLen;
+        file.read(reinterpret_cast<char*>(&runLen), 2);
+        if (runLen == 0) break; // End-of-data marker
+
+        uint8_t r, g, b, a;
+        file.read(reinterpret_cast<char*>(&r), 1);
+        file.read(reinterpret_cast<char*>(&g), 1);
+        file.read(reinterpret_cast<char*>(&b), 1);
+        file.read(reinterpret_cast<char*>(&a), 1);
+
+        for (uint16_t j = 0; j < runLen && pixelsWritten < pixelCount; j++) {
+            size_t idx = pixelsWritten * 4;
+            pixels[idx + 0] = r;
+            pixels[idx + 1] = g;
+            pixels[idx + 2] = b;
+            pixels[idx + 3] = a;
+            pixelsWritten++;
+        }
+    }
+
+    file.close();
+
+    if (pixelsWritten != pixelCount) {
+        std::cerr << "Warning: level file had " << pixelsWritten
+                  << " pixels, expected " << pixelCount << std::endl;
+    }
+
+    // Upload to both state texture buffers
+    for (int i = 0; i < 2; i++) {
+        glBindTexture(GL_TEXTURE_2D, stateTextures[i]);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
+            GL_RGBA_INTEGER, GL_UNSIGNED_BYTE, pixels.data());
+    }
+
+    // Clear force fields
+    std::vector<float> clearForce(static_cast<size_t>(worldWidth) * worldHeight * 4, 0.0f);
+    for (int i = 0; i < 2; i++) {
+        glBindTexture(GL_TEXTURE_2D, forceTextures[i]);
+        glTexSubImage2D(GL_TEXTURE_2D, 0, 0, 0, worldWidth, worldHeight,
+            GL_RGBA, GL_FLOAT, clearForce.data());
+    }
+
+    glBindTexture(GL_TEXTURE_2D, 0);
+    wakeAllChunks();
+
+    std::cout << "Level loaded from: " << filepath << std::endl;
+    return true;
 }
 
 void World::wakeAllChunks() {

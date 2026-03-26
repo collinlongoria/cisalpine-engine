@@ -1,6 +1,4 @@
 Engine Features:
-- Improved item selection window w/ search
-- Nicer UI theme
 - Web build (emscripten, webgl/wgpu?)
 
 Simulation Features:
@@ -16,7 +14,6 @@ Elements:
 - Wire
 - Battery (just provides electricity)
 - Electricity
-- Metal
 - Powder Lighting
 
 Known issues:
