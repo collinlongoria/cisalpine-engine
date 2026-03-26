@@ -617,8 +617,7 @@
       1.0
     ],
     "baseHeight": 0.1,
-    "colorVariation": 0.05,
-    "script": "IF HEIGHTABOVE LESSTHAN 60 ROLL 8 TURN Water"
+    "colorVariation": 0.05
   },
   "HeavySand": {
     "type": "Granular",

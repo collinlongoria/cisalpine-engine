@@ -1074,7 +1074,7 @@ void main() {
     }
 
     // Generic Life Decay (Fire death -> Smoke, others -> Empty)
-    if (elem != SMOKE && elem != BOMB && life > 0u) {
+    if (elem != SMOKE && elem != BOMB && elem != CLOUD && life > 0u) {
         uint decayRate = 4u;
         if (life <= decayRate) {
             uint deathElem;
