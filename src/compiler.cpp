@@ -1,5 +1,5 @@
 /*
-* File: dsl_compiler.cpp
+* File: compiler.cpp
 * Project: Cisalpine Engine
 * Author: Collin Longoria
 * Created on: 3/4/2026
@@ -9,7 +9,6 @@
 * This software is released under the MIT License.
 * https://opensource.org/licenses/MIT
 *
-* DSL Compiler implementation: Three-stage pipeline (Lex → Parse → Emit GLSL).
 */
 
 #include "compiler.hpp"
@@ -23,9 +22,6 @@ namespace cisalpine {
 
 const std::vector<VariableAllocation> DSLCompiler::emptyVars = {};
 
-// ============================================================
-// Lexer
-// ============================================================
 
 bool Lexer::isKeyword(const std::string& word, TokenType& out) {
     static const std::map<std::string, TokenType> keywords = {
@@ -161,10 +157,6 @@ static void findMakesNodes(const ASTNodePtr& node, bool& makesHot, bool& makesCo
         for (auto& c : block->children) findMakesNodes(c, makesHot, makesCold);
     }
 }
-
-// Note: These generateGLSL methods use placeholder patterns.
-// The DSLCompiler::emitGLSL method wraps them with proper variable
-// read/write logic using the bit-pack allocations.
 
 std::string DefineNode::generateGLSL(const std::string& indent) const {
     // DEFINE doesn't generate runtime GLSL - it's handled at initialization
@@ -371,10 +363,6 @@ std::string BlockNode::generateGLSL(const std::string& indent) const {
     }
     return glsl;
 }
-
-// ============================================================
-// DSL Compiler: Parsing
-// ============================================================
 
 static const Token& peek(const std::vector<Token>& tokens, size_t pos) {
     if (pos < tokens.size()) return tokens[pos];
@@ -674,10 +662,6 @@ std::vector<ASTNodePtr> DSLCompiler::parseBody(const std::vector<Token>& tokens,
     return nodes;
 }
 
-// ============================================================
-// Bit-Pack Allocation
-// ============================================================
-
 int DSLCompiler::bitsNeeded(int maxValue) const {
     if (maxValue <= 0) return 1;
     int bits = 0;
@@ -748,10 +732,6 @@ std::string DSLCompiler::generateWriteVar(const VariableAllocation& var, const s
     return ss.str();
 }
 
-// ============================================================
-// Compilation
-// ============================================================
-
 bool DSLCompiler::compile(const std::string& elementName, int elementId, const std::string& source) {
     if (source.empty()) return true; // No script is valid
 
@@ -783,10 +763,6 @@ bool DSLCompiler::compile(const std::string& elementName, int elementId, const s
         return false;
     }
 }
-
-// ============================================================
-// GLSL Emission
-// ============================================================
 
 std::string DSLCompiler::emitGLSL() const {
     if (scripts.empty()) {

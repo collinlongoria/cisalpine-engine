@@ -394,7 +394,22 @@ ivec2 desiredDest(ivec2 src, uint elem) {
         }
     }
     else if (type == TYPE_GAS) {
-        if (getElement(up) == EMPTY) return up;
+        if (getElement(up) == EMPTY) {
+            // Drift chance: gases sometimes move diagonally upward instead of straight
+            float absDensity = abs(elements[elem].density);
+            float driftChance = clamp(3.0 / max(absDensity, 0.5), 0.02, 0.5);
+            float roll = float(hash3u(uvec2(src), frameCount) & 0xFFFFu) / 65535.0;
+            if (roll < driftChance) {
+                if (leftFirst) {
+                    if (getElement(upL) == EMPTY) return upL;
+                    if (getElement(upR) == EMPTY) return upR;
+                } else {
+                    if (getElement(upR) == EMPTY) return upR;
+                    if (getElement(upL) == EMPTY) return upL;
+                }
+            }
+            return up;
+        }
         if (leftFirst) {
             if (getElement(upL) == EMPTY) return upL;
             if (getElement(upR) == EMPTY) return upR;
@@ -478,30 +493,78 @@ bool isTouchingSoil(ivec2 pos) {
     return false;
 }
 
-bool tryPullWoodTip(ivec2 pos, out uvec4 newState) {
+// ======================================================================
+// Grower System
+// Unified growth element that replaces WoodTip/LeafTip.
+//
+// State encoding:
+//   R = GROWER (element ID)
+//   G = energy (remaining growth steps)
+//   B = packed data: bits 0-3 = growthType, bits 4-7 = dirSeed
+//   A = unused
+//
+// Growth types:
+//   0 = Trunk  (grows upward, branches diagonally, becomes Wood)
+//   1 = Leaf   (spreads outward biased upward, becomes Plant)
+//   2-15 = reserved for future growables
+// ======================================================================
+
+const uint GROW_TRUNK = 0u;
+const uint GROW_LEAF  = 1u;
+
+uint growerType(uint packedData) {
+    return packedData & 0xFu;
+}
+
+uint growerSeed(uint packedData) {
+    return (packedData >> 4u) & 0xFu;
+}
+
+uint packGrower(uint gtype, uint seed) {
+    return (gtype & 0xFu) | ((seed & 0xFu) << 4u);
+}
+
+// What element does a grower become when consumed?
+uint growerFinalElement(uint gtype) {
+    if (gtype == GROW_TRUNK) return WOOD;
+    if (gtype == GROW_LEAF)  return PLANT;
+    return WOOD; // fallback
+}
+
+// What life value does the final element get?
+uint growerFinalLife(uint gtype) {
+    return 0u;
+}
+
+// Try to pull trunk growth from below (vertical growth)
+bool tryPullTrunk(ivec2 pos, out uvec4 newState) {
     ivec2 below = pos + ivec2(0, -1);
     if (!inBounds(below)) return false;
 
     uvec4 belowState = getState(below);
 
-    if (belowState.r == WOODTIP) {
+    // Pull from an existing trunk grower below
+    if (belowState.r == GROWER && growerType(belowState.b) == GROW_TRUNK) {
         uint energy = belowState.g;
-        uint branchSeed = belowState.b;
+        uint seed = growerSeed(belowState.b);
         if (energy > 0u) {
-            newState = uvec4(WOODTIP, energy - 1u, branchSeed, 0u);
+            // Continue trunk upward
+            newState = uvec4(GROWER, energy - 1u, packGrower(GROW_TRUNK, seed), 0u);
             return true;
         } else {
-            newState = uvec4(LEAFTIP, 8u, branchSeed, 0u);
+            // Trunk out of energy → spawn leaf grower
+            newState = uvec4(GROWER, 8u, packGrower(GROW_LEAF, seed), 0u);
             return true;
         }
     }
 
+    // Pull from activated sapling (growthStep == 1 means "ready to grow")
     if (belowState.r == SAPLING && belowState.b >= 1u) {
         uint targetHeight = belowState.g;
         uint growthStep = belowState.b;
         if (growthStep == 1u) {
-            uint seed = hash2u(uvec2(below));
-            newState = uvec4(WOODTIP, targetHeight - 1u, seed & 0xFFu, 0u);
+            uint seed = hash2u(uvec2(below)) & 0xFu;
+            newState = uvec4(GROWER, targetHeight - 1u, packGrower(GROW_TRUNK, seed), 0u);
             return true;
         }
     }
@@ -509,16 +572,17 @@ bool tryPullWoodTip(ivec2 pos, out uvec4 newState) {
     return false;
 }
 
+// Try to pull branch growth from diagonal-below trunk growers
 bool tryPullBranch(ivec2 pos, out uvec4 newState) {
     for (int dx = -1; dx <= 1; dx += 2) {
         ivec2 diagBelow = pos + ivec2(dx, -1);
         if (!inBounds(diagBelow)) continue;
 
         uvec4 nState = getState(diagBelow);
-        if (nState.r != WOODTIP) continue;
+        if (nState.r != GROWER || growerType(nState.b) != GROW_TRUNK) continue;
 
         uint energy = nState.g;
-        uint branchSeed = nState.b;
+        uint seed = growerSeed(nState.b);
 
         float branchRoll = float(hash3u(uvec2(diagBelow), frameCount * 37u + uint(dx)) & 0xFFFFu) / 65535.0;
 
@@ -531,14 +595,16 @@ bool tryPullBranch(ivec2 pos, out uvec4 newState) {
 
         if (branchRoll < branchChance && energy > 3u) {
             uint branchLen = 2u + (hash3u(uvec2(pos), frameCount + 99u) % 3u);
-            newState = uvec4(LEAFTIP, branchLen, branchSeed ^ uint(dx + 2), 0u);
+            uint branchSeed = (seed ^ uint(dx + 2)) & 0xFu;
+            newState = uvec4(GROWER, branchLen, packGrower(GROW_LEAF, branchSeed), 0u);
             return true;
         }
     }
     return false;
 }
 
-bool tryPullLeafTip(ivec2 pos, out uvec4 newState) {
+// Try to pull leaf spread from any adjacent leaf grower
+bool tryPullLeaf(ivec2 pos, out uvec4 newState) {
     for (int dy = -1; dy <= 1; dy++) {
         for (int dx = -1; dx <= 1; dx++) {
             if (dx == 0 && dy == 0) continue;
@@ -546,17 +612,18 @@ bool tryPullLeafTip(ivec2 pos, out uvec4 newState) {
             if (!inBounds(nPos)) continue;
 
             uvec4 nState = getState(nPos);
-            if (nState.r != LEAFTIP) continue;
+            if (nState.r != GROWER || growerType(nState.b) != GROW_LEAF) continue;
 
             uint energy = nState.g;
-            uint dirSeed = nState.b;
+            uint seed = growerSeed(nState.b);
             if (energy == 0u) continue;
 
             float spreadRoll = float(hash3u(uvec2(pos), frameCount * 71u + uint(dx * 3 + dy)) & 0xFFFFu) / 65535.0;
             float spreadChance = (dy >= 0) ? 0.35 : 0.10;
 
             if (spreadRoll < spreadChance) {
-                newState = uvec4(LEAFTIP, energy - 1u, dirSeed ^ hash3u(uvec2(pos), 123u), 0u);
+                uint newSeed = (seed ^ uint(hash3u(uvec2(pos), 123u))) & 0xFu;
+                newState = uvec4(GROWER, energy - 1u, packGrower(GROW_LEAF, newSeed), 0u);
                 return true;
             }
         }
@@ -564,11 +631,6 @@ bool tryPullLeafTip(ivec2 pos, out uvec4 newState) {
     return false;
 }
 
-// ======================================================================
-// DSL INJECTION POINT
-// The C++ DSL compiler generates executeCustomBehaviors() and helper
-// functions which are injected here by the shader loader.
-// ======================================================================
 // DSL_INJECTION_POINT
 
 void main() {
@@ -730,71 +792,6 @@ void main() {
         cur.a = dslState.a;  // Preserve swarm direction for desiredDest
     }
 
-    // SEED -> GRASS Logic
-    if (elem == SEED) {
-        ivec2 below = pos + ivec2(0, -1);
-        bool resting = !inBounds(below) || !canDisplace(elem, getElement(below));
-
-        if (resting) {
-            bool touchingSoil = false;
-            for (int dy = -1; dy <= 1; dy++) {
-                for (int dx = -1; dx <= 1; dx++) {
-                    if (dx == 0 && dy == 0) continue;
-                    ivec2 np = pos + ivec2(dx, dy);
-                    if (inBounds(np)) {
-                        uint ne = getElement(np);
-                        if (ne == DIRT || ne == GRASS) {
-                            touchingSoil = true;
-                        }
-                    }
-                }
-            }
-            if (touchingSoil) {
-                imageStore(stateOut, pos, uvec4(GRASS, 255u, 0, 0));
-                wakeChunkAndNeighbors(pos);
-                return;
-            }
-        }
-    }
-
-    // GRASS Spreading
-    if (elem == DIRT) {
-        ivec2 dirs[8] = ivec2[8](
-            ivec2(1,0), ivec2(-1,0), ivec2(0,-1), ivec2(0,1),
-            ivec2(1,1), ivec2(-1,1), ivec2(1,-1), ivec2(-1,-1)
-        );
-
-        int startIdx = int(random01b(pos) * 8.0);
-
-        for (int i = 0; i < 8; i++) {
-            int idx = (startIdx + i) % 8;
-            ivec2 neighborPos = pos + dirs[idx];
-
-            if (inBounds(neighborPos)) {
-                uvec4 nState = getState(neighborPos);
-                uint nElem = nState.r;
-                uint nLife = nState.g;
-
-                if (nElem == GRASS && nLife > 30u) {
-                    ivec2 belowNeighbor = neighborPos + ivec2(0, -1);
-                    bool isSettled = !inBounds(belowNeighbor) || !canDisplace(GRASS, getElement(belowNeighbor));
-
-                    if (isSettled) {
-                        float spreadChance = (float(nLife) / 255.0) * 0.10;
-                        if (random01(pos) < spreadChance) {
-                            uint newLife = nLife - 20u;
-                            if (newLife < 30u) newLife = 30u;
-
-                            imageStore(stateOut, pos, uvec4(GRASS, newLife, 0, 0));
-                            wakeChunkAndNeighbors(pos);
-                            return;
-                        }
-                    }
-                }
-            }
-        }
-    }
-
     // SAPLING
     if (elem == SAPLING) {
         uint targetHeight = cur.g;
@@ -812,7 +809,8 @@ void main() {
             ivec2 above = pos + ivec2(0, 1);
             uvec4 aboveState = getState(above);
 
-            if (aboveState.r == WOODTIP || aboveState.r == WOOD || growthStep > 1u) {
+            if ((aboveState.r == GROWER && growerType(aboveState.b) == GROW_TRUNK)
+                || aboveState.r == WOOD || growthStep > 1u) {
                 imageStore(stateOut, pos, uvec4(WOOD, 0u, 0u, 0u));
                 return;
             }
@@ -822,16 +820,10 @@ void main() {
         }
     }
 
-    // WOODTIP
-    if (elem == WOODTIP) {
-        imageStore(stateOut, pos, uvec4(WOOD, 0u, 0u, 0u));
-        wakeChunkAndNeighbors(pos);
-        return;
-    }
-
-    // LEAFTIP
-    if (elem == LEAFTIP) {
-        imageStore(stateOut, pos, uvec4(PLANT, 255u, 0u, 0u));
+    // GROWER: unified growth element — becomes its final form when consumed
+    if (elem == GROWER) {
+        uint gtype = growerType(cur.b);
+        imageStore(stateOut, pos, uvec4(growerFinalElement(gtype), growerFinalLife(gtype), 0u, 0u));
         wakeChunkAndNeighbors(pos);
         return;
     }
@@ -857,7 +849,7 @@ void main() {
 
         uvec4 newState;
 
-        if (tryPullWoodTip(pos, newState)) {
+        if (tryPullTrunk(pos, newState)) {
             imageStore(stateOut, pos, newState);
             wakeChunkAndNeighbors(pos);
             return;
@@ -869,7 +861,7 @@ void main() {
             return;
         }
 
-        if (tryPullLeafTip(pos, newState)) {
+        if (tryPullLeaf(pos, newState)) {
             imageStore(stateOut, pos, newState);
             wakeChunkAndNeighbors(pos);
             return;

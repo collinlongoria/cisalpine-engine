@@ -4,7 +4,7 @@ Engine Features:
 - Web build (emscripten, webgl/wgpu?)
 
 Simulation Features:
-- Generic grower with scripting impl
+- Improve scripting impl with generic grower
 
 Rendering Features:
 
@@ -25,6 +25,5 @@ Elements:
 
 Known issues:
 - Dragging mouse does not behave properly
-- Tree leaves dissapear
 
 Optimizations:
