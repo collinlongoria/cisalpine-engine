@@ -1,5 +1,5 @@
 /*
-* File: dsl_compiler.hpp
+* File: compiler.hpp
 * Project: Cisalpine Engine
 * Author: Collin Longoria
 * Created on: 3/4/2026
@@ -9,9 +9,6 @@
 * This software is released under the MIT License.
 * https://opensource.org/licenses/MIT
 *
-* DSL Compiler: Lexes, parses, and emits GLSL from element behavior scripts.
-* Scripts are compiled into a single executeCustomBehaviors() function
-* that is injected into simulation.comp at shader load time.
 */
 
 #ifndef CISALPINE_DSL_COMPILER_HPP
@@ -24,10 +21,6 @@
 #include <cstdint>
 
 namespace cisalpine {
-
-// ============================================================
-// Stage 1: Lexer (Tokenizer)
-// ============================================================
 
 enum class TokenType {
     // Keywords
@@ -42,6 +35,7 @@ enum class TokenType {
     CREATE,
     MAKES,
     BURN,
+    EXPLODE,
     SWARM,       // Boid-like flocking behavior
     ANY,         // Wildcard: matches any non-empty, non-indestructible element
 
@@ -90,10 +84,6 @@ public:
 private:
     static bool isKeyword(const std::string& word, TokenType& out);
 };
-
-// ============================================================
-// Stage 2: Parser (AST Generation)
-// ============================================================
 
 // Forward declarations
 struct ASTNode;
@@ -203,9 +193,11 @@ struct BlockNode : public ASTNode {
     std::string generateGLSL(const std::string& indent = "    ") const override;
 };
 
-// ============================================================
-// Stage 3: Bit-Pack Allocation & Variable Registry
-// ============================================================
+// EXPLODE STRENGTH
+struct ExplodeNode : public ASTNode {
+    int strength;
+    std::string generateGLSL(const std::string& indent = "    ") const override;
+};
 
 struct VariableAllocation {
     std::string name;
@@ -222,10 +214,6 @@ struct ElementScript {
     std::vector<VariableAllocation> variables;
     int totalBitsUsed = 0;
 };
-
-// ============================================================
-// DSL Compiler: Ties it all together
-// ============================================================
 
 class DSLCompiler {
 public:

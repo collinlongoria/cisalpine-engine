@@ -1,5 +1,5 @@
 /*
-* File: dsl_compiler.cpp
+* File: compiler.cpp
 * Project: Cisalpine Engine
 * Author: Collin Longoria
 * Created on: 3/4/2026
@@ -8,8 +8,6 @@
 *
 * This software is released under the MIT License.
 * https://opensource.org/licenses/MIT
-*
-* DSL Compiler implementation: Three-stage pipeline (Lex → Parse → Emit GLSL).
 */
 
 #include "compiler.hpp"
@@ -23,10 +21,7 @@ namespace cisalpine {
 
 const std::vector<VariableAllocation> DSLCompiler::emptyVars = {};
 
-// ============================================================
 // Lexer
-// ============================================================
-
 bool Lexer::isKeyword(const std::string& word, TokenType& out) {
     static const std::map<std::string, TokenType> keywords = {
         {"DEFINE",      TokenType::DEFINE},
@@ -54,6 +49,7 @@ bool Lexer::isKeyword(const std::string& word, TokenType& out) {
         {"EQUAL",       TokenType::EQUAL},
         {"HOT",         TokenType::HOT},
         {"COLD",        TokenType::COLD},
+        {"EXPLODE",     TokenType::EXPLODE},
     };
 
     auto it = keywords.find(word);
@@ -163,10 +159,6 @@ static void findMakesNodes(const ASTNodePtr& node, bool& makesHot, bool& makesCo
     }
 }
 
-// Note: These generateGLSL methods use placeholder patterns.
-// The DSLCompiler::emitGLSL method wraps them with proper variable
-// read/write logic using the bit-pack allocations.
-
 std::string DefineNode::generateGLSL(const std::string& indent) const {
     // DEFINE doesn't generate runtime GLSL - it's handled at initialization
     return "";
@@ -181,14 +173,22 @@ std::string AddNode::generateGLSL(const std::string& indent) const {
     return indent + "/* ADD " + varName + " " + std::to_string(value) + " */\n";
 }
 
+// TODO: make elements json have lifetime
 std::string TurnNode::generateGLSL(const std::string& indent) const {
-    // Convert element name to uppercase #define name
     std::string upper = targetElement;
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
-    return indent + "curState.r = " + upper + ";\n"
-         + indent + "curState.g = 0u;\n"
-         + indent + "customData = getInitCustomData(" + upper + ");\n"
-         + indent + "changed = true;\n";
+
+    std::string glsl = indent + "curState.r = " + upper + ";\n";
+
+    // Give proper default lifespans to volatile elements, otherwise make immortal (0)
+    glsl += indent + "if (" + upper + " == FIRE || " + upper + " == CLOUD || " + upper + " == STEAM) curState.g = 255u;\n";
+    glsl += indent + "else if (" + upper + " == SMOKE) curState.g = 200u;\n";
+    glsl += indent + "else curState.g = 0u;\n";
+
+    glsl += indent + "customData = getInitCustomData(" + upper + ");\n";
+    glsl += indent + "changed = true;\n";
+
+    return glsl;
 }
 
 std::string CreateNode::generateGLSL(const std::string& indent) const {
@@ -236,9 +236,9 @@ std::string IfNode::generateGLSL(const std::string& indent) const {
         const Condition& cond = conditions[i];
 
         // Variable read will be injected by the compiler
-        // Built-in variables start with dsl_ and are already declared
+        // Built-in variables start with c_ and are already declared
         std::string varRead;
-        if (cond.varName.substr(0, 4) == "dsl_") {
+        if (cond.varName.substr(0, 2) == "c_") {
             varRead = cond.varName; // Built-in: use directly
         } else {
             varRead = "VAR_" + cond.varName; // User-defined: placeholder
@@ -314,12 +314,6 @@ std::string InteractNode::generateGLSL(const std::string& indent) const {
 std::string SwarmNode::generateGLSL(const std::string& indent) const {
     std::string glsl;
 
-    // Instead of doing direct imageStore (which races), we encode a desired
-    // movement direction into curState.a using a 1-9 encoding:
-    //   0 = no movement, 1-9 = direction index (see swarmDirX/swarmDirY in simulation.comp)
-    // The simulation shader's main() reads this and handles movement safely
-    // using the existing propose-and-vote system.
-
     glsl += indent + "// SWARM: boid-like flocking (direction encoding)\n";
     glsl += indent + "{\n";
     glsl += indent + "    vec2 cohesion = vec2(0.0);\n";
@@ -386,10 +380,12 @@ std::string BlockNode::generateGLSL(const std::string& indent) const {
     return glsl;
 }
 
-// ============================================================
-// DSL Compiler: Parsing
-// ============================================================
+std::string ExplodeNode::generateGLSL(const std::string& indent) const {
+    // Type 1u is the explosive effector
+    return indent + "emitEffector(vec2(pos), 1u, " + std::to_string(strength) + ".0);\n";
+}
 
+// DSL Compiler: Parsing
 static const Token& peek(const std::vector<Token>& tokens, size_t pos) {
     if (pos < tokens.size()) return tokens[pos];
     static Token eof(TokenType::END_OF_FILE, "", 0);
@@ -527,6 +523,12 @@ ASTNodePtr DSLCompiler::parseAction(const std::vector<Token>& tokens, size_t& po
             }
             return node;
         }
+        case TokenType::EXPLODE: {
+            pos++;
+            auto node = std::make_shared<ExplodeNode>();
+            node->strength = expectNumber(tokens, pos);
+            return node;
+        }
         default:
             throw std::runtime_error("DSL Parser: Unexpected token '" + tok.value +
                                      "' when expecting action at position " + std::to_string(pos));
@@ -591,19 +593,19 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
             Condition cond;
             const Token& condTok = peek(tokens, pos);
             if (condTok.type == TokenType::HEIGHTABOVE) {
-                cond.varName = "dsl_heightAbove";
+                cond.varName = "c_heightAbove";
                 pos++;
             } else if (condTok.type == TokenType::HEIGHTBELOW) {
-                cond.varName = "dsl_heightBelow";
+                cond.varName = "c_heightBelow";
                 pos++;
             } else if (condTok.type == TokenType::NEARBY) {
-                cond.varName = "dsl_nearby";
+                cond.varName = "c_nearby";
                 pos++;
             } else if (condTok.type == TokenType::HOT) {
-                cond.varName = "dsl_hot";
+                cond.varName = "c_hot";
                 pos++;
             } else if (condTok.type == TokenType::COLD) {
-                cond.varName = "dsl_cold";
+                cond.varName = "c_cold";
                 pos++;
             } else {
                 cond.varName = expectIdentifier(tokens, pos);
@@ -618,7 +620,7 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
                 pos++;
                 cond.value = expectNumber(tokens, pos);
             } else {
-                if (cond.varName == "dsl_hot" || cond.varName == "dsl_cold" || cond.varName == "dsl_nearby") {
+                if (cond.varName == "c_hot" || cond.varName == "c_cold" || cond.varName == "c_nearby") {
                     cond.op = TokenType::GREATERTHAN;
                     cond.value = 0;
                 } else {
@@ -633,19 +635,19 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
                 Condition andCond;
                 const Token& andCondTok = peek(tokens, pos);
                 if (andCondTok.type == TokenType::HEIGHTABOVE) {
-                    andCond.varName = "dsl_heightAbove";
+                    andCond.varName = "c_heightAbove";
                     pos++;
                 } else if (andCondTok.type == TokenType::HEIGHTBELOW) {
-                    andCond.varName = "dsl_heightBelow";
+                    andCond.varName = "c_heightBelow";
                     pos++;
                 } else if (andCondTok.type == TokenType::NEARBY) {
-                    andCond.varName = "dsl_nearby";
+                    andCond.varName = "c_nearby";
                     pos++;
                 } else if (andCondTok.type == TokenType::HOT) {
-                    andCond.varName = "dsl_hot";
+                    andCond.varName = "c_hot";
                     pos++;
                 } else if (andCondTok.type == TokenType::COLD) {
-                    andCond.varName = "dsl_cold";
+                    andCond.varName = "c_cold";
                     pos++;
                 } else {
                     andCond.varName = expectIdentifier(tokens, pos);
@@ -658,7 +660,7 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
                     pos++;
                     andCond.value = expectNumber(tokens, pos);
                 } else {
-                    if (andCond.varName == "dsl_hot" || andCond.varName == "dsl_cold" || andCond.varName == "dsl_nearby") {
+                    if (andCond.varName == "c_hot" || andCond.varName == "c_cold" || andCond.varName == "c_nearby") {
                         andCond.op = TokenType::GREATERTHAN;
                         andCond.value = 0;
                     } else {
@@ -696,10 +698,7 @@ std::vector<ASTNodePtr> DSLCompiler::parseBody(const std::vector<Token>& tokens,
     return nodes;
 }
 
-// ============================================================
 // Bit-Pack Allocation
-// ============================================================
-
 int DSLCompiler::bitsNeeded(int maxValue) const {
     if (maxValue <= 0) return 1;
     int bits = 0;
@@ -770,10 +769,7 @@ std::string DSLCompiler::generateWriteVar(const VariableAllocation& var, const s
     return ss.str();
 }
 
-// ============================================================
 // Compilation
-// ============================================================
-
 bool DSLCompiler::compile(const std::string& elementName, int elementId, const std::string& source) {
     if (source.empty()) return true; // No script is valid
 
@@ -806,10 +802,7 @@ bool DSLCompiler::compile(const std::string& elementName, int elementId, const s
     }
 }
 
-// ============================================================
 // GLSL Emission
-// ============================================================
-
 std::string DSLCompiler::emitGLSL() const {
     if (scripts.empty()) {
         return "// No DSL scripts compiled\n"
@@ -882,30 +875,30 @@ std::string DSLCompiler::emitGLSL() const {
 
     // Built-in readable values
     glsl << "    // Built-in readable values\n";
-    glsl << "    uint dsl_heightAbove = uint(int(worldSize.y) - pos.y);\n";
-    glsl << "    uint dsl_heightBelow = uint(pos.y);\n";
-    glsl << "    uint dsl_nearby = 0u;\n";
-    glsl << "    uint dsl_hot = 0u;\n";
-    glsl << "    uint dsl_cold = 0u;\n";
+    glsl << "    uint c_heightAbove = uint(int(worldSize.y) - pos.y);\n";
+    glsl << "    uint c_heightBelow = uint(pos.y);\n";
+    glsl << "    uint c_nearby = 0u;\n";
+    glsl << "    uint c_hot = 0u;\n";
+    glsl << "    uint c_cold = 0u;\n";
     glsl << "    for (int ny_ = -1; ny_ <= 1; ny_++) {\n";
     glsl << "        for (int nx_ = -1; nx_ <= 1; nx_++) {\n";
     glsl << "            if (nx_ == 0 && ny_ == 0) continue;\n";
     glsl << "            if (inBounds(pos + ivec2(nx_, ny_))) {\n";
     glsl << "                uint ne = getElement(pos + ivec2(nx_, ny_));\n";
-    glsl << "                if (ne == elem) dsl_nearby++;\n";
+    glsl << "                if (ne == elem) c_nearby++;\n";
     if (!hotElements.empty()) {
         glsl << "                if (";
         for (size_t i = 0; i < hotElements.size(); i++) {
             glsl << "ne == " << hotElements[i] << (i + 1 == hotElements.size() ? "" : " || ");
         }
-        glsl << ") dsl_hot++;\n";
+        glsl << ") c_hot++;\n";
     }
     if (!coldElements.empty()) {
         glsl << "                if (";
         for (size_t i = 0; i < coldElements.size(); i++) {
             glsl << "ne == " << coldElements[i] << (i + 1 == coldElements.size() ? "" : " || ");
         }
-        glsl << ") dsl_cold++;\n";
+        glsl << ") c_cold++;\n";
     }
     glsl << "            }\n";
     glsl << "        }\n";

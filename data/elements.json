@@ -756,7 +756,7 @@
     ],
     "baseHeight": 0.1,
     "colorVariation": 0.06,
-    "script": "INTERACT Fire TURN Fire\nINTERACT Lava TURN Fire"
+    "script": "INTERACT Fire EXPLODE 15 TURN Fire\nINTERACT Lava EXPLODE 15 TURN Fire"
   },
   "Fireflies": {
     "type": "Static",

@@ -14,12 +14,197 @@
 
 #include <iostream>
 #include <cmath>
+#include <cstring>
+#include <algorithm>
+#include <cctype>
 #include <imgui.h>
 #include <imgui_impl_glfw.h>
 #include <imgui_impl_opengl3.h>
 
 
 namespace cisalpine {
+
+// Theme application
+void App::applyTheme() {
+    ImGuiStyle& style = ImGui::GetStyle();
+    ImVec4* c = style.Colors;
+
+    c[ImGuiCol_WindowBg]             = theme.panelBg;
+    c[ImGuiCol_ChildBg]              = theme.childBg;
+    c[ImGuiCol_PopupBg]              = theme.popupBg;
+    c[ImGuiCol_Border]               = theme.border;
+    c[ImGuiCol_TitleBg]              = theme.titleBg;
+    c[ImGuiCol_TitleBgActive]        = theme.titleBgActive;
+    c[ImGuiCol_Text]                 = theme.text;
+    c[ImGuiCol_TextDisabled]         = theme.textDim;
+    c[ImGuiCol_FrameBg]              = theme.frameBg;
+    c[ImGuiCol_FrameBgHovered]       = theme.frameBgHovered;
+    c[ImGuiCol_FrameBgActive]        = theme.frameBgActive;
+    c[ImGuiCol_ScrollbarBg]          = theme.scrollbarBg;
+    c[ImGuiCol_ScrollbarGrab]        = theme.scrollbarGrab;
+    c[ImGuiCol_ScrollbarGrabHovered] = theme.scrollbarHovered;
+    c[ImGuiCol_ScrollbarGrabActive]  = theme.scrollbarHovered;
+    c[ImGuiCol_Separator]            = theme.separator;
+    c[ImGuiCol_SeparatorHovered]     = theme.separator;
+    c[ImGuiCol_SeparatorActive]      = theme.separator;
+    c[ImGuiCol_Button]               = theme.button;
+    c[ImGuiCol_ButtonHovered]        = theme.buttonHovered;
+    c[ImGuiCol_ButtonActive]         = theme.buttonActive;
+    c[ImGuiCol_Tab]                  = theme.tab;
+    c[ImGuiCol_TabHovered]           = theme.tabHovered;
+    c[ImGuiCol_TabSelected]          = theme.tabActive;
+    c[ImGuiCol_SliderGrab]           = theme.accent;
+    c[ImGuiCol_SliderGrabActive]     = theme.accentActive;
+    c[ImGuiCol_CheckMark]            = theme.accent;
+    c[ImGuiCol_Header]               = theme.accent;
+    c[ImGuiCol_HeaderHovered]        = theme.accentHovered;
+    c[ImGuiCol_HeaderActive]         = theme.accentActive;
+
+    style.WindowRounding    = 0.0f;
+    style.ChildRounding     = 4.0f;
+    style.FrameRounding     = 4.0f;
+    style.GrabRounding      = 3.0f;
+    style.TabRounding       = 4.0f;
+    style.ScrollbarRounding = 4.0f;
+    style.WindowBorderSize  = 0.0f;
+    style.FrameBorderSize   = 0.0f;
+    style.ItemSpacing       = ImVec2(6.0f, 4.0f);
+    style.FramePadding      = ImVec2(6.0f, 3.0f);
+}
+
+// Element category helpers
+bool App::elementMatchesTab(int id, ElementTab tab) const {
+    const auto& names = registry.getNames();
+    if (id < 0 || id >= static_cast<int>(names.size())) return false;
+    const std::string& name = names[id];
+
+    // Element id 0 (Empty/Eraser) shows in every tab
+    if (id == 0) return true;
+
+    // Light elements: anything with "Light" in the name, or RainbowNeon
+    bool isLight = (name.find("Light") != std::string::npos) || name == "RainbowNeon";
+
+    // "Other" bucket
+    static const char* otherNames[] = {
+        "Wind", "Void", "BlackHole", "Duplicator",
+        "FanLeft", "FanRight", "FanUp", "FanDown",
+        "Cloud", "Locusts", "Fireflies", "Grower"
+    };
+    bool isOther = false;
+    for (const char* n : otherNames) {
+        if (name == n) { isOther = true; break; }
+    }
+
+    // Gas
+    static const char* gasNames[] = { "Fire", "Smoke", "Steam", "Gas" };
+    bool isGas = false;
+    for (const char* n : gasNames) {
+        if (name == n) { isGas = true; break; }
+    }
+
+    // Liquid
+    static const char* liquidNames[] = { "Water", "Lava", "Acid", "Slag" };
+    bool isLiquid = false;
+    for (const char* n : liquidNames) {
+        if (name == n) { isLiquid = true; break; }
+    }
+
+    switch (tab) {
+        case ElementTab::Lights: return isLight;
+        case ElementTab::Other:  return isOther;
+        case ElementTab::Gases:  return isGas;
+        case ElementTab::Liquids: return isLiquid;
+        case ElementTab::Solids:
+            return !isLight && !isOther && !isGas && !isLiquid;
+        default: return false;
+    }
+}
+
+bool App::elementMatchesSearch(const std::string& name) const {
+    if (searchBuffer[0] == '\0') return true;
+    std::string lowerName = name;
+    std::string lowerSearch = searchBuffer;
+    std::transform(lowerName.begin(), lowerName.end(), lowerName.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    std::transform(lowerSearch.begin(), lowerSearch.end(), lowerSearch.begin(),
+                   [](unsigned char c) { return std::tolower(c); });
+    return lowerName.find(lowerSearch) != std::string::npos;
+}
+
+void App::renderElementButtons(const std::vector<std::string>& names, float availWidth) {
+    int visibleIndex = 0;
+    for (size_t i = 0; i < names.size(); i++) {
+        if (names[i].empty()) continue;
+        if (registry.isHidden(static_cast<int>(i))) continue;
+
+        int id = static_cast<int>(i);
+
+        // Filter by search or tab
+        bool show = false;
+        if (searchActive && searchBuffer[0] != '\0') {
+            // When searching, show matches across ALL tabs; also match "Eraser" for id 0
+            std::string displayForSearch = (id == 0) ? "Eraser" : names[i];
+            show = elementMatchesSearch(displayForSearch);
+        } else {
+            show = elementMatchesTab(id, currentTab);
+        }
+        if (!show) continue;
+
+        bool isSelected = (selectedElementId == id);
+        glm::vec4 elemColor = registry.getColor(id);
+
+        const char* displayName;
+        if (id == 0) displayName = "Eraser";
+        else if (names[i] == "Wind") displayName = "Wind";
+        else displayName = names[i].c_str();
+
+        float brightness = isSelected ? 1.0f : 0.5f;
+        ImVec4 bgColor(elemColor.r * brightness, elemColor.g * brightness,
+                       elemColor.b * brightness, 1.0f);
+
+        float luminance = 0.299f * elemColor.r + 0.587f * elemColor.g + 0.114f * elemColor.b;
+        ImVec4 textColor = (luminance * brightness > 0.45f)
+            ? ImVec4(0.0f, 0.0f, 0.0f, 1.0f)
+            : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
+
+        ImVec4 hoverColor(
+            fmin(elemColor.r * 0.8f + 0.2f, 1.0f),
+            fmin(elemColor.g * 0.8f + 0.2f, 1.0f),
+            fmin(elemColor.b * 0.8f + 0.2f, 1.0f),
+            1.0f);
+        ImVec4 activeColor(elemColor.r, elemColor.g, elemColor.b, 1.0f);
+
+        if (isSelected) {
+            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
+            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
+        }
+
+        ImGui::PushStyleColor(ImGuiCol_Button, bgColor);
+        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
+        ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeColor);
+        ImGui::PushStyleColor(ImGuiCol_Text, textColor);
+        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f);
+
+        float buttonWidth = (availWidth - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
+        if (ImGui::Button(displayName, ImVec2(buttonWidth, 24.0f))) {
+            selectedElementId = id;
+        }
+
+        ImGui::PopStyleVar(1);
+        ImGui::PopStyleColor(4);
+
+        if (isSelected) {
+            ImGui::PopStyleVar(1);
+            ImGui::PopStyleColor(1);
+        }
+
+        if ((visibleIndex % 2) == 0) {
+            ImGui::SameLine();
+        }
+        visibleIndex++;
+    }
+    if (visibleIndex > 0) ImGui::NewLine();
+}
 
 void App::scrollCallback(GLFWwindow* window, double xoffset, double yoffset) {
     App* app = static_cast<App*>(glfwGetWindowUserPointer(window));
@@ -90,7 +275,20 @@ void App::init(int worldW, int worldH) {
     ImGuiIO& io = ImGui::GetIO();
     io.ConfigFlags |= ImGuiConfigFlags_NavEnableKeyboard;
 
-    ImGui::StyleColorsDark();
+    // Load custom font — falls back to default if file not found
+    ImFont* customFont = nullptr;
+    if (theme.fontPath) {
+        customFont = io.Fonts->AddFontFromFileTTF(theme.fontPath, theme.fontSize);
+    }
+    if (!customFont) {
+        io.Fonts->AddFontDefault();
+    }
+    // Crisp pixel-perfect rendering (no sub-pixel AA)
+    io.Fonts->Flags |= ImFontAtlasFlags_NoPowerOfTwoHeight;
+
+    // Apply theme colors and style
+    applyTheme();
+
     ImGui_ImplGlfw_InitForOpenGL(window, true);
     ImGui_ImplOpenGL3_Init("#version 460");
 
@@ -190,8 +388,8 @@ void App::handleInput(float dt) {
     lastTildePressed = tildePressed;
 
     // Allow panning even if ImGui has keyboard focus for text input,
-    // but not if settings window is open
-    if (!settingsOpen) {
+    // but not if settings window is open or a text field has focus
+    if (!settingsOpen && !io.WantTextInput) {
         float panAmount = camera.panSpeed * dt / camera.zoom;
 
         if (glfwGetKey(window, GLFW_KEY_W) == GLFW_PRESS ||
@@ -688,92 +886,53 @@ void App::renderUI() {
         ImGui::Text("Chunks: %d/%d", world->getActiveChunkCount(), world->getTotalChunks());
     }
 
-    // ELEMENTS - Data-driven from registry
+    // ELEMENTS
     ImGui::Separator();
-    ImGui::Text("Elements");
 
     const auto& names = registry.getNames();
     float availWidth = ImGui::GetContentRegionAvail().x;
 
-    int visibleIndex = 0;  // Track visible item count for 2-column layout
-    for (size_t i = 0; i < names.size(); i++) {
-        if (names[i].empty()) continue;
-
-        // Skip hidden elements (like WoodTip, LeafTip)
-        if (registry.isHidden(static_cast<int>(i))) continue;
-
-        int id = static_cast<int>(i);
-        bool isSelected = (selectedElementId == id);
-
-        // Get element color from registry
-        glm::vec4 elemColor = registry.getColor(id);
-
-        // Display name: "Eraser" for Empty, otherwise use registry name
-        // Special display for Wind
-        const char* displayName;
-        if (id == 0) {
-            displayName = "Eraser";
+    // Search bar
+    {
+        float searchWidth = availWidth - 22.0f; // leave room for X button
+        ImGui::SetNextItemWidth(searchWidth);
+        if (ImGui::InputTextWithHint("##Search", "Search elements...", searchBuffer, sizeof(searchBuffer))) {
+            searchActive = (searchBuffer[0] != '\0');
         }
-        else if (names[i] == "Wind") {
-            displayName = "Wind";
+        ImGui::SameLine();
+        if (ImGui::SmallButton("X")) {
+            searchBuffer[0] = '\0';
+            searchActive = false;
         }
-        else {
-            displayName = names[i].c_str();
-        }
-
-        // Colored capsule button
-        // Background: element color (dimmed if not selected, bright if selected)
-        float brightness = isSelected ? 1.0f : 0.5f;
-        ImVec4 bgColor(elemColor.r * brightness, elemColor.g * brightness,
-                       elemColor.b * brightness, 1.0f);
-
-        // Text color: pick white or black based on luminance for readability
-        float luminance = 0.299f * elemColor.r + 0.587f * elemColor.g + 0.114f * elemColor.b;
-        ImVec4 textColor = (luminance * brightness > 0.45f)
-            ? ImVec4(0.0f, 0.0f, 0.0f, 1.0f)
-            : ImVec4(1.0f, 1.0f, 1.0f, 1.0f);
-
-        // Hover/active colors
-        ImVec4 hoverColor(
-            fmin(elemColor.r * 0.8f + 0.2f, 1.0f),
-            fmin(elemColor.g * 0.8f + 0.2f, 1.0f),
-            fmin(elemColor.b * 0.8f + 0.2f, 1.0f),
-            1.0f);
-        ImVec4 activeColor(elemColor.r, elemColor.g, elemColor.b, 1.0f);
-
-        // Selection border
-        if (isSelected) {
-            ImGui::PushStyleColor(ImGuiCol_Border, ImVec4(1.0f, 1.0f, 1.0f, 1.0f));
-            ImGui::PushStyleVar(ImGuiStyleVar_FrameBorderSize, 2.0f);
-        }
-
-        ImGui::PushStyleColor(ImGuiCol_Button, bgColor);
-        ImGui::PushStyleColor(ImGuiCol_ButtonHovered, hoverColor);
-        ImGui::PushStyleColor(ImGuiCol_ButtonActive, activeColor);
-        ImGui::PushStyleColor(ImGuiCol_Text, textColor);
-        ImGui::PushStyleVar(ImGuiStyleVar_FrameRounding, 12.0f); // Capsule shape
-
-        // Two-column layout: each button takes half the available width minus spacing
-        float buttonWidth = (availWidth - ImGui::GetStyle().ItemSpacing.x) * 0.5f;
-        if (ImGui::Button(displayName, ImVec2(buttonWidth, 24.0f))) {
-            selectedElementId = id;
-        }
-
-        ImGui::PopStyleVar(1);  // FrameRounding
-        ImGui::PopStyleColor(4); // Button, Hovered, Active, Text
-
-        if (isSelected) {
-            ImGui::PopStyleVar(1);  // FrameBorderSize
-            ImGui::PopStyleColor(1); // Border
-        }
-
-        // Two-column: put next button on same line if this was an even-indexed visible item
-        if ((visibleIndex % 2) == 0) {
-            ImGui::SameLine();
-        }
-        visibleIndex++;
     }
-    ImGui::NewLine();
+
+    // Tab bar
+    if (!searchActive) {
+        static const char* tabNames[] = { "Solids", "Liquids", "Gases", "Lights", "Other" };
+        if (ImGui::BeginTabBar("##ElementTabs", ImGuiTabBarFlags_FittingPolicyScroll)) {
+            for (int t = 0; t < static_cast<int>(ElementTab::COUNT); t++) {
+                if (ImGui::BeginTabItem(tabNames[t])) {
+                    if (currentTab != static_cast<ElementTab>(t)) {
+                        currentTab = static_cast<ElementTab>(t);
+                        // Clear search when switching tabs
+                        searchBuffer[0] = '\0';
+                        searchActive = false;
+                    }
+                    ImGui::EndTabItem();
+                }
+            }
+            ImGui::EndTabBar();
+        }
+    }
+
+    // Element buttons (scrollable region)
+    {
+        float remainingHeight = ImGui::GetContentRegionAvail().y - 220.0f; // reserve space for brush/lighting/controls
+        if (remainingHeight < 60.0f) remainingHeight = 60.0f;
+        ImGui::BeginChild("##ElementList", ImVec2(0, remainingHeight), ImGuiChildFlags_None, ImGuiWindowFlags_None);
+        renderElementButtons(names, ImGui::GetContentRegionAvail().x);
+        ImGui::EndChild();
+    }
 
     // BRUSH
     ImGui::Separator();
