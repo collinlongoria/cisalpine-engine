@@ -276,7 +276,7 @@ std::string InteractNode::generateGLSL(const std::string& indent) const {
         if (isAny) {
             glsl += indent + "    { uint _ne = getElement(pos + ivec2(" +
                     std::to_string(dirX) + ", " + std::to_string(dirY) + "));\n";
-            glsl += indent + "      if (_ne != EMPTY && _ne != VOID && _ne != BLACKHOLE && _ne != elem) " +
+            glsl += indent + "      if (_ne != EMPTY && _ne != VOID && _ne != BLACKHOLE && _ne != elem && elements[_ne].density > 0.0) " +
                     foundVar + " = true; }\n";
         } else {
             glsl += indent + "    if (getElement(pos + ivec2(" +
@@ -291,7 +291,7 @@ std::string InteractNode::generateGLSL(const std::string& indent) const {
         glsl += indent + "            if (dx == 0 && dy == 0) continue;\n";
         if (isAny) {
             glsl += indent + "            { uint _ne = getElement(pos + ivec2(dx, dy));\n";
-            glsl += indent + "              if (_ne != EMPTY && _ne != VOID && _ne != BLACKHOLE && _ne != elem) " +
+            glsl += indent + "              if (_ne != EMPTY && _ne != VOID && _ne != BLACKHOLE && _ne != elem && elements[_ne].density > 0.0) " +
                     foundVar + " = true; }\n";
         } else {
             glsl += indent + "            if (getElement(pos + ivec2(dx, dy)) == " + upper + ") {\n";
@@ -350,22 +350,22 @@ std::string SwarmNode::generateGLSL(const std::string& indent) const {
     glsl += indent + "        float steerLen = length(steer);\n";
     glsl += indent + "        if (steerLen > 0.1) {\n";
     glsl += indent + "            steer /= steerLen;\n";
-    glsl += indent + "            steer.x += (random01(pos) - 0.5) * 0.5;\n";
-    glsl += indent + "            steer.y += (random01b(pos) - 0.5) * 0.5;\n";
+    glsl += indent + "            steer.x += (float(hash3u(uvec2(pos), frameCount * 11u + 1u) & 0xFFFFu) / 65535.0 - 0.5) * 0.5;\n";
+    glsl += indent + "            steer.y += (float(hash3u(uvec2(pos), frameCount * 13u + 2u) & 0xFFFFu) / 65535.0 - 0.5) * 0.5;\n";
     glsl += indent + "            moveX = int(sign(steer.x));\n";
     glsl += indent + "            moveY = int(sign(steer.y));\n";
     glsl += indent + "        } else {\n";
     glsl += indent + "            // Neighbors too close/balanced, wander\n";
-    glsl += indent + "            moveX = int(random01(pos) * 3.0) - 1;\n";
-    glsl += indent + "            moveY = int(random01b(pos) * 3.0) - 1;\n";
+    glsl += indent + "            moveX = int(hash3u(uvec2(pos), frameCount * 17u + 3u) % 3u) - 1;\n";
+    glsl += indent + "            moveY = int(hash3u(uvec2(pos), frameCount * 19u + 4u) % 3u) - 1;\n";
     glsl += indent + "        }\n";
     glsl += indent + "    } else {\n";
     glsl += indent + "        // No neighbors: wander randomly\n";
-    glsl += indent + "        moveX = int(random01(pos) * 3.0) - 1;\n";
-    glsl += indent + "        moveY = int(random01b(pos) * 3.0) - 1;\n";
+    glsl += indent + "        moveX = int(hash3u(uvec2(pos), frameCount * 23u + 5u) % 3u) - 1;\n";
+    glsl += indent + "        moveY = int(hash3u(uvec2(pos), frameCount * 29u + 6u) % 3u) - 1;\n";
     glsl += indent + "    }\n";
     glsl += indent + "    // Only move some of the time for natural pacing\n";
-    glsl += indent + "    if ((moveX != 0 || moveY != 0) && random01(pos) < 0.7) {\n";
+    glsl += indent + "    if ((moveX != 0 || moveY != 0) && (hash3u(uvec2(pos), frameCount * 31u + 7u) % 100u) < 70u) {\n";
     glsl += indent + "        // Encode direction as 1-9: (moveX+1)*3 + (moveY+1) + 1\n";
     glsl += indent + "        // This maps (-1,-1) to 1, (0,-1) to 2, ... (1,1) to 9\n";
     glsl += indent + "        // 0 = no movement\n";

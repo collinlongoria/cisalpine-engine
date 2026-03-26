@@ -66,8 +66,13 @@ void main() {
         // Light element
         if (elem == LIGHT) {
             float intensity = elements[elem].lightIntensity;
-            if (intensity <= 0.0) intensity = 1.5;
+            if (intensity <= 0.0) intensity = 3.5;
             emission = vec3(1.0, 0.98, 0.9) * intensity;
+        }
+        else if (elem == FIREFLIES) {
+            float intensity = elements[elem].lightIntensity;
+            if (intensity <= 0.0) intensity = 1.5;
+            emission = vec3(1.0, 1.0, 0.0) * intensity;
         }
         else if(elem == REDLIGHT || elem == BLUELIGHT || elem == GREENLIGHT || elem == CYANLIGHT || elem == YELLOWLIGHT || elem == MAGENTALIGHT){
             float intensity = elements[elem].lightIntensity;

@@ -12,16 +12,12 @@ Elements:
 - Flowers
 - Bee & Honeycomb
 - Objects (loaded in via sprites in assets folder)
-- Duplicator
 - Lightning
 - Wire
 - Battery (just provides electricity)
 - Electricity
 - Metal
 - Powder Lighting
-- Fireflies
-- Acid
-- Gas
 
 Known issues:
 - Dragging mouse does not behave properly

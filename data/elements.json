@@ -773,7 +773,7 @@
     "lightIntensity": 0.6,
     "colorVariation": 0.08,
     "animType": "Fire",
-    "script": "SWARM 8 3"
+    "script": "SWARM 8 13"
   },
   "Duplicator": {
     "type": "Static",

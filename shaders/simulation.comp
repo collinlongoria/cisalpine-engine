@@ -939,7 +939,11 @@ void main() {
                 }
             }
         }
+
+        // Write our own state to the output texture before returning!
+        imageStore(stateOut, pos, cur);
         wakeChunkAndNeighbors(pos);
+        return;
     }
 
     // EMPTY CELL
