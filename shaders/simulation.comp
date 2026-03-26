@@ -631,6 +631,11 @@ bool tryPullLeaf(ivec2 pos, out uvec4 newState) {
     return false;
 }
 
+// ======================================================================
+// DSL INJECTION POINT
+// The C++ DSL compiler generates executeCustomBehaviors() and helper
+// functions which are injected here by the shader loader.
+// ======================================================================
 // DSL_INJECTION_POINT
 
 void main() {
@@ -792,6 +797,71 @@ void main() {
         cur.a = dslState.a;  // Preserve swarm direction for desiredDest
     }
 
+    // SEED -> GRASS Logic
+    if (elem == SEED) {
+        ivec2 below = pos + ivec2(0, -1);
+        bool resting = !inBounds(below) || !canDisplace(elem, getElement(below));
+
+        if (resting) {
+            bool touchingSoil = false;
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    ivec2 np = pos + ivec2(dx, dy);
+                    if (inBounds(np)) {
+                        uint ne = getElement(np);
+                        if (ne == DIRT || ne == GRASS) {
+                            touchingSoil = true;
+                        }
+                    }
+                }
+            }
+            if (touchingSoil) {
+                imageStore(stateOut, pos, uvec4(GRASS, 255u, 0, 0));
+                wakeChunkAndNeighbors(pos);
+                return;
+            }
+        }
+    }
+
+    // GRASS Spreading
+    if (elem == DIRT) {
+        ivec2 dirs[8] = ivec2[8](
+            ivec2(1,0), ivec2(-1,0), ivec2(0,-1), ivec2(0,1),
+            ivec2(1,1), ivec2(-1,1), ivec2(1,-1), ivec2(-1,-1)
+        );
+
+        int startIdx = int(random01b(pos) * 8.0);
+
+        for (int i = 0; i < 8; i++) {
+            int idx = (startIdx + i) % 8;
+            ivec2 neighborPos = pos + dirs[idx];
+
+            if (inBounds(neighborPos)) {
+                uvec4 nState = getState(neighborPos);
+                uint nElem = nState.r;
+                uint nLife = nState.g;
+
+                if (nElem == GRASS && nLife > 30u) {
+                    ivec2 belowNeighbor = neighborPos + ivec2(0, -1);
+                    bool isSettled = !inBounds(belowNeighbor) || !canDisplace(GRASS, getElement(belowNeighbor));
+
+                    if (isSettled) {
+                        float spreadChance = (float(nLife) / 255.0) * 0.10;
+                        if (random01(pos) < spreadChance) {
+                            uint newLife = nLife - 20u;
+                            if (newLife < 30u) newLife = 30u;
+
+                            imageStore(stateOut, pos, uvec4(GRASS, newLife, 0, 0));
+                            wakeChunkAndNeighbors(pos);
+                            return;
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // SAPLING
     if (elem == SAPLING) {
         uint targetHeight = cur.g;
@@ -826,6 +896,50 @@ void main() {
         imageStore(stateOut, pos, uvec4(growerFinalElement(gtype), growerFinalLife(gtype), 0u, 0u));
         wakeChunkAndNeighbors(pos);
         return;
+    }
+
+    // DUPLICATOR: captures a neighboring element type, then dispenses it
+    // State: G = captured element ID (0 = not yet captured), B = unused
+    if (elem == DUPLICATOR) {
+        uint captured = cur.g;
+
+        if (captured == 0u) {
+            // Not yet captured — scan neighbors for a non-empty, non-static element to capture
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    ivec2 np = pos + ivec2(dx, dy);
+                    if (!inBounds(np)) continue;
+                    uint ne = getElement(np);
+                    if (ne != EMPTY && ne != DUPLICATOR && ne != VOID && ne != BLACKHOLE
+                        && ne < MAX_ELEMENTS) {
+                        // Capture this element type
+                        cur.g = ne;
+                        imageStore(stateOut, pos, cur);
+                        wakeChunkAndNeighbors(pos);
+                        return;
+                    }
+                }
+            }
+        } else {
+            // Already captured — dispense into adjacent empty cells
+            for (int dy = -1; dy <= 1; dy++) {
+                for (int dx = -1; dx <= 1; dx++) {
+                    if (dx == 0 && dy == 0) continue;
+                    ivec2 np = pos + ivec2(dx, dy);
+                    if (!inBounds(np)) continue;
+                    if (getElement(np) == EMPTY) {
+                        // Dispense with some randomness to avoid flooding
+                        float roll = float(hash3u(uvec2(np), frameCount * 53u + uint(dx * 3 + dy)) & 0xFFFFu) / 65535.0;
+                        if (roll < 0.15) {
+                            imageStore(stateOut, np, uvec4(captured, 0u, 0u, 0u));
+                            wakeChunkAndNeighbors(np);
+                        }
+                    }
+                }
+            }
+        }
+        wakeChunkAndNeighbors(pos);
     }
 
     // EMPTY CELL

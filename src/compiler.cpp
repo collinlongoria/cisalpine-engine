@@ -1,5 +1,5 @@
 /*
-* File: compiler.cpp
+* File: dsl_compiler.cpp
 * Project: Cisalpine Engine
 * Author: Collin Longoria
 * Created on: 3/4/2026
@@ -9,6 +9,7 @@
 * This software is released under the MIT License.
 * https://opensource.org/licenses/MIT
 *
+* DSL Compiler implementation: Three-stage pipeline (Lex → Parse → Emit GLSL).
 */
 
 #include "compiler.hpp"
@@ -22,6 +23,9 @@ namespace cisalpine {
 
 const std::vector<VariableAllocation> DSLCompiler::emptyVars = {};
 
+// ============================================================
+// Lexer
+// ============================================================
 
 bool Lexer::isKeyword(const std::string& word, TokenType& out) {
     static const std::map<std::string, TokenType> keywords = {
@@ -37,6 +41,7 @@ bool Lexer::isKeyword(const std::string& word, TokenType& out) {
         {"MAKES",       TokenType::MAKES},
         {"BURN",        TokenType::BURN},
         {"SWARM",       TokenType::SWARM},
+        {"ANY",         TokenType::ANY},
         {"ABOVE",       TokenType::ABOVE},
         {"BELOW",       TokenType::BELOW},
         {"LEFTOF",      TokenType::LEFTOF},
@@ -158,6 +163,10 @@ static void findMakesNodes(const ASTNodePtr& node, bool& makesHot, bool& makesCo
     }
 }
 
+// Note: These generateGLSL methods use placeholder patterns.
+// The DSLCompiler::emitGLSL method wraps them with proper variable
+// read/write logic using the bit-pack allocations.
+
 std::string DefineNode::generateGLSL(const std::string& indent) const {
     // DEFINE doesn't generate runtime GLSL - it's handled at initialization
     return "";
@@ -257,25 +266,38 @@ std::string InteractNode::generateGLSL(const std::string& indent) const {
     std::transform(upper.begin(), upper.end(), upper.begin(), ::toupper);
 
     std::string glsl;
-    std::string foundVar = "found_" + upper;
+    std::string foundVar = isAny ? "found_ANY" : ("found_" + upper);
 
     glsl += indent + "{\n";
     glsl += indent + "    bool " + foundVar + " = false;\n";
 
     if (dirX != 0 || dirY != 0) {
         // Directional check - only check specific neighbor
-        glsl += indent + "    if (getElement(pos + ivec2(" +
-                std::to_string(dirX) + ", " + std::to_string(dirY) + ")) == " + upper + ") {\n";
-        glsl += indent + "        " + foundVar + " = true;\n";
-        glsl += indent + "    }\n";
+        if (isAny) {
+            glsl += indent + "    { uint _ne = getElement(pos + ivec2(" +
+                    std::to_string(dirX) + ", " + std::to_string(dirY) + "));\n";
+            glsl += indent + "      if (_ne != EMPTY && _ne != VOID && _ne != BLACKHOLE && _ne != elem) " +
+                    foundVar + " = true; }\n";
+        } else {
+            glsl += indent + "    if (getElement(pos + ivec2(" +
+                    std::to_string(dirX) + ", " + std::to_string(dirY) + ")) == " + upper + ") {\n";
+            glsl += indent + "        " + foundVar + " = true;\n";
+            glsl += indent + "    }\n";
+        }
     } else {
-        // Original behavior - check all 8 neighbors
+        // Check all 8 neighbors
         glsl += indent + "    for (int dy = -1; dy <= 1; dy++) {\n";
         glsl += indent + "        for (int dx = -1; dx <= 1; dx++) {\n";
         glsl += indent + "            if (dx == 0 && dy == 0) continue;\n";
-        glsl += indent + "            if (getElement(pos + ivec2(dx, dy)) == " + upper + ") {\n";
-        glsl += indent + "                " + foundVar + " = true;\n";
-        glsl += indent + "            }\n";
+        if (isAny) {
+            glsl += indent + "            { uint _ne = getElement(pos + ivec2(dx, dy));\n";
+            glsl += indent + "              if (_ne != EMPTY && _ne != VOID && _ne != BLACKHOLE && _ne != elem) " +
+                    foundVar + " = true; }\n";
+        } else {
+            glsl += indent + "            if (getElement(pos + ivec2(dx, dy)) == " + upper + ") {\n";
+            glsl += indent + "                " + foundVar + " = true;\n";
+            glsl += indent + "            }\n";
+        }
         glsl += indent + "        }\n";
         glsl += indent + "    }\n";
     }
@@ -363,6 +385,10 @@ std::string BlockNode::generateGLSL(const std::string& indent) const {
     }
     return glsl;
 }
+
+// ============================================================
+// DSL Compiler: Parsing
+// ============================================================
 
 static const Token& peek(const std::vector<Token>& tokens, size_t pos) {
     if (pos < tokens.size()) return tokens[pos];
@@ -533,7 +559,15 @@ ASTNodePtr DSLCompiler::parseStatement(const std::vector<Token>& tokens, size_t&
                 node->dirX = 1; node->dirY = 0; pos++;
             }
 
-            node->targetElement = expectIdentifier(tokens, pos);
+            // Check for ANY wildcard
+            if (match(tokens, pos, TokenType::ANY)) {
+                node->isAny = true;
+                node->targetElement = "ANY";
+                pos++;
+            } else {
+                node->targetElement = expectIdentifier(tokens, pos);
+            }
+
             // Parse subsequent actions until we hit another top-level statement or EOF
             while (pos < tokens.size()) {
                 const Token& next = peek(tokens, pos);
@@ -662,6 +696,10 @@ std::vector<ASTNodePtr> DSLCompiler::parseBody(const std::vector<Token>& tokens,
     return nodes;
 }
 
+// ============================================================
+// Bit-Pack Allocation
+// ============================================================
+
 int DSLCompiler::bitsNeeded(int maxValue) const {
     if (maxValue <= 0) return 1;
     int bits = 0;
@@ -732,6 +770,10 @@ std::string DSLCompiler::generateWriteVar(const VariableAllocation& var, const s
     return ss.str();
 }
 
+// ============================================================
+// Compilation
+// ============================================================
+
 bool DSLCompiler::compile(const std::string& elementName, int elementId, const std::string& source) {
     if (source.empty()) return true; // No script is valid
 
@@ -763,6 +805,10 @@ bool DSLCompiler::compile(const std::string& elementName, int elementId, const s
         return false;
     }
 }
+
+// ============================================================
+// GLSL Emission
+// ============================================================
 
 std::string DSLCompiler::emitGLSL() const {
     if (scripts.empty()) {

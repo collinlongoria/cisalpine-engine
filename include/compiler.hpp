@@ -1,5 +1,5 @@
 /*
-* File: compiler.hpp
+* File: dsl_compiler.hpp
 * Project: Cisalpine Engine
 * Author: Collin Longoria
 * Created on: 3/4/2026
@@ -9,6 +9,9 @@
 * This software is released under the MIT License.
 * https://opensource.org/licenses/MIT
 *
+* DSL Compiler: Lexes, parses, and emits GLSL from element behavior scripts.
+* Scripts are compiled into a single executeCustomBehaviors() function
+* that is injected into simulation.comp at shader load time.
 */
 
 #ifndef CISALPINE_DSL_COMPILER_HPP
@@ -21,6 +24,10 @@
 #include <cstdint>
 
 namespace cisalpine {
+
+// ============================================================
+// Stage 1: Lexer (Tokenizer)
+// ============================================================
 
 enum class TokenType {
     // Keywords
@@ -35,18 +42,19 @@ enum class TokenType {
     CREATE,
     MAKES,
     BURN,
-    SWARM,
+    SWARM,       // Boid-like flocking behavior
+    ANY,         // Wildcard: matches any non-empty, non-indestructible element
 
     // Direction keywords
-    ABOVE,
-    BELOW,
-    LEFTOF,
-    RIGHTOF,
+    ABOVE,       // Check/interact with cell above
+    BELOW,       // Check/interact with cell below
+    LEFTOF,      // Check/interact with cell left
+    RIGHTOF,     // Check/interact with cell right
 
     // Built-in readable values
-    HEIGHTABOVE,
-    HEIGHTBELOW,
-    NEARBY,
+    HEIGHTABOVE, // Pixel Y-distance to top of world
+    HEIGHTBELOW, // Pixel Y-distance to bottom of world
+    NEARBY,      // Count of same-element neighbors
 
     // Operators
     LESSTHAN,
@@ -82,6 +90,10 @@ public:
 private:
     static bool isKeyword(const std::string& word, TokenType& out);
 };
+
+// ============================================================
+// Stage 2: Parser (AST Generation)
+// ============================================================
 
 // Forward declarations
 struct ASTNode;
@@ -170,6 +182,7 @@ struct InteractNode : public ASTNode {
     std::vector<ASTNodePtr> actions; // Actions executed when neighbor is found
     int dirX = 0;  // 0 = any direction (original behavior)
     int dirY = 0;  // Non-zero = specific direction check
+    bool isAny = false; // true = match any non-empty, non-indestructible neighbor
 
     std::string generateGLSL(const std::string& indent = "    ") const override;
 };
@@ -190,6 +203,10 @@ struct BlockNode : public ASTNode {
     std::string generateGLSL(const std::string& indent = "    ") const override;
 };
 
+// ============================================================
+// Stage 3: Bit-Pack Allocation & Variable Registry
+// ============================================================
+
 struct VariableAllocation {
     std::string name;
     int bitOffset;
@@ -205,6 +222,10 @@ struct ElementScript {
     std::vector<VariableAllocation> variables;
     int totalBitsUsed = 0;
 };
+
+// ============================================================
+// DSL Compiler: Ties it all together
+// ============================================================
 
 class DSLCompiler {
 public:

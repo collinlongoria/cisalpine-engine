@@ -22,7 +22,8 @@
       1.0
     ],
     "density": 10,
-    "colorVariation": 0.1
+    "colorVariation": 0.1,
+    "script": "INTERACT Acid ROLL 12 TURN Empty"
   },
   "Stone": {
     "type": "Static",
@@ -35,7 +36,7 @@
     "density": 100,
     "specularPower": 4.0,
     "colorVariation": 0.1,
-    "script": "INTERACT Lava ROLL 1 TURN Lava"
+    "script": "INTERACT Lava ROLL 1 TURN Lava\nINTERACT Acid ROLL 4 TURN Empty"
   },
   "Water": {
     "type": "Liquid",
@@ -94,7 +95,7 @@
     ],
     "density": 50,
     "colorVariation": 0.1,
-    "script": "INTERACT Fire ROLL 5 TURN Fire\nINTERACT Lava ROLL 5 TURN Fire"
+    "script": "INTERACT Fire ROLL 5 TURN Fire\nINTERACT Lava ROLL 5 TURN Fire\nINTERACT Acid ROLL 10 TURN Empty"
   },
   "Fire": {
     "type": "Gas",
@@ -149,7 +150,7 @@
     ],
     "density": 12,
     "colorVariation": 0.12,
-    "script": "INTERACT Seed TURN Grass\nINTERACT Grass ROLL 2 TURN Grass"
+    "script": "INTERACT Seed TURN Grass\nINTERACT Grass ROLL 2 TURN Grass\nINTERACT Acid ROLL 12 TURN Empty"
   },
   "Seed": {
     "type": "Granular",
@@ -174,7 +175,7 @@
     ],
     "density": 12,
     "colorVariation": 0.12,
-    "script": "INTERACT Fire ROLL 30 TURN Dirt\nINTERACT Lava ROLL 30 TURN Dirt"
+    "script": "INTERACT Fire ROLL 30 TURN Dirt\nINTERACT Lava ROLL 30 TURN Dirt\nINTERACT Acid ROLL 15 TURN Empty"
   },
   "Obsidian": {
     "type": "Static",
@@ -186,7 +187,8 @@
     ],
     "density": 200,
     "specularPower": 24.0,
-    "colorVariation": 0.06
+    "colorVariation": 0.06,
+    "script": "INTERACT Acid ROLL 2 TURN Empty"
   },
   "Plant": {
     "type": "Static",
@@ -198,7 +200,7 @@
     ],
     "density": 3,
     "colorVariation": 0.12,
-    "script": "INTERACT Fire ROLL 40 TURN Fire\nINTERACT Lava ROLL 40 TURN Fire"
+    "script": "INTERACT Fire ROLL 40 TURN Fire\nINTERACT Lava ROLL 40 TURN Fire\nINTERACT Acid ROLL 15 TURN Empty"
   },
   "Sapling": {
     "type": "Granular",
@@ -575,7 +577,7 @@
     ],
     "baseHeight": 0.9,
     "colorVariation": 0.06,
-    "script": "MAKES COLD\nINTERACT Fire ROLL 80 TURN Water\nINTERACT Lava ROLL 80 TURN Water"
+    "script": "MAKES COLD\nINTERACT Fire ROLL 80 TURN Water\nINTERACT Lava ROLL 80 TURN Water\nINTERACT Acid ROLL 20 TURN Empty"
   },
   "Steam": {
     "type": "Gas",
@@ -629,7 +631,8 @@
     "density": 25,
     "mass": 5.0,
     "specularPower": 2.0,
-    "colorVariation": 0.08
+    "colorVariation": 0.08,
+    "script": "INTERACT Acid ROLL 8 TURN Empty"
   },
   "Aerogel": {
     "type": "Granular",
@@ -650,7 +653,8 @@
       1.0
     ],
     "baseHeight": 0.6,
-    "colorVariation": 0.06
+    "colorVariation": 0.06,
+    "script": "INTERACT Acid ROLL 30 TURN Empty"
   },
   "Snow": {
     "color": [
@@ -663,7 +667,7 @@
     "density": 1.5,
     "mass": 0.3,
     "colorVariation": 0.04,
-    "script": "MAKES COLD\nINTERACT Fire ROLL 60 TURN Water\nINTERACT Lava ROLL 60 TURN Water"
+    "script": "MAKES COLD\nINTERACT Fire ROLL 60 TURN Water\nINTERACT Lava ROLL 60 TURN Water\nINTERACT Acid ROLL 25 TURN Empty"
   },
   "Metal": {
     "color": [
@@ -676,7 +680,7 @@
     "density": 50.0,
     "specularPower": 32.0,
     "colorVariation": 0.06,
-    "script": "INTERACT Lava TURN Slag\nINTERACT Fire TURN Slag\nINTERACT Slag TURN Slag"
+    "script": "INTERACT Lava TURN Slag\nINTERACT Fire TURN Slag\nINTERACT Slag TURN Slag\nINTERACT Acid ROLL 3 TURN Empty"
   },
   "Slag": {
     "color": [
@@ -706,6 +710,82 @@
     "mass": 0.2,
     "colorVariation": 0.1,
     "script": "SWARM 5 2"
+  },
+  "Acid": {
+    "type": "Liquid",
+    "color": [
+      0.3,
+      0.9,
+      0.1,
+      0.85
+    ],
+    "density": 6,
+    "viscosity": 0.03,
+    "glow": true,
+    "lightRadius": 4,
+    "lightIntensity": 0.4,
+    "opacity": 0.15,
+    "specularPower": 16.0,
+    "transmissionTint": [
+      0.2,
+      1.0,
+      0.1,
+      1.0
+    ],
+    "baseHeight": 0.3,
+    "colorVariation": 0.1,
+    "animType": "Liquid",
+    "script": "INTERACT ANY ROLL 6 TURN Empty\nINTERACT Water ROLL 50 TURN Water"
+  },
+  "Gas": {
+    "type": "Gas",
+    "color": [
+      0.95,
+      0.92,
+      0.8,
+      0.5
+    ],
+    "density": -2,
+    "life": 0,
+    "opacity": 0.04,
+    "transmissionTint": [
+      0.95,
+      0.92,
+      0.8,
+      1.0
+    ],
+    "baseHeight": 0.1,
+    "colorVariation": 0.06,
+    "script": "INTERACT Fire TURN Fire\nINTERACT Lava TURN Fire"
+  },
+  "Fireflies": {
+    "type": "Static",
+    "color": [
+      1.0,
+      0.95,
+      0.3,
+      1.0
+    ],
+    "density": 0.5,
+    "mass": 0.1,
+    "glow": true,
+    "lightRadius": 6,
+    "lightIntensity": 0.6,
+    "colorVariation": 0.08,
+    "animType": "Fire",
+    "script": "SWARM 8 3"
+  },
+  "Duplicator": {
+    "type": "Static",
+    "color": [
+      0.9,
+      0.3,
+      0.7,
+      1.0
+    ],
+    "density": 100,
+    "specularPower": 8.0,
+    "colorVariation": 0.04
   },
   "FanLeft": {
     "type": "Static",
