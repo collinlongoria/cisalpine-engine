@@ -8,9 +8,6 @@
 *
 * This software is released under the MIT License.
 * https://opensource.org/licenses/MIT
-*
-* MODIFIED: DSL Integration - Removed flammability, probability, maxLife from
-*           GPU struct (now handled by DSL scripts). Added DSL compiler.
 */
 
 #ifndef CISALPINE_REGISTRY_HPP
@@ -80,6 +77,9 @@ public:
     // Get the DSL compiler for custom data initialization
     const DSLCompiler& getDSLCompiler() const { return dslCompiler; }
 
+    // Get the display names
+    const std::vector<std::string>& getDisplayNames() const { return displayNames; }
+
 private:
     std::vector<GPUElementData> gpuData;
     std::vector<std::string> names;
@@ -87,6 +87,7 @@ private:
     std::vector<bool> singleClickFlags;
     std::vector<bool> hiddenFlags;
     std::vector<int> maxLifeValues;
+    std::vector<std::string> displayNames;
     GLuint ssbo = 0;
 
     // DSL Compiler

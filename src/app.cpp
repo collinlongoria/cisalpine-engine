@@ -150,6 +150,8 @@ bool App::elementMatchesSearch(const std::string& name) const {
 }
 
 void App::renderElementButtons(const std::vector<std::string>& names, float availWidth) {
+    const auto& displayNames = registry.getDisplayNames();
+
     int visibleIndex = 0;
     for (size_t i = 0; i < names.size(); i++) {
         if (names[i].empty()) continue;
@@ -160,10 +162,10 @@ void App::renderElementButtons(const std::vector<std::string>& names, float avai
         // Filter by search or tab
         bool show = false;
         if (searchActive && searchBuffer[0] != '\0') {
-            // When searching, show matches across ALL tabs; also match "Eraser" for id 0
-            std::string displayForSearch = (id == 0) ? "Eraser" : names[i];
+            std::string displayForSearch = (id == 0) ? "Eraser" : displayNames[i];
             show = elementMatchesSearch(displayForSearch);
-        } else {
+        }
+        else {
             show = elementMatchesTab(id, currentTab);
         }
         if (!show) continue;
@@ -173,8 +175,7 @@ void App::renderElementButtons(const std::vector<std::string>& names, float avai
 
         const char* displayName;
         if (id == 0) displayName = "Eraser";
-        else if (names[i] == "Wind") displayName = "Wind";
-        else displayName = names[i].c_str();
+        else displayName = displayNames[i].c_str();
 
         float brightness = isSelected ? 1.0f : 0.5f;
         ImVec4 bgColor(elemColor.r * brightness, elemColor.g * brightness,
@@ -1072,8 +1073,11 @@ void App::renderUI() {
     ImGui::BulletText("~: Debug Panel");
 
     ImGui::Separator();
+
+    const auto& displayNames = registry.getDisplayNames();
     const char* selectedName = (selectedElementId == 0) ? "Eraser"
-        : (selectedElementId < static_cast<int>(names.size()) ? names[selectedElementId].c_str() : "Unknown");
+        : (selectedElementId < static_cast<int>(displayNames.size()) ? displayNames[selectedElementId].c_str() : "Unknown");
+
     if (isDrawing) {
         ImGui::TextColored(ImVec4(0.2f, 1.0f, 0.2f, 1.0f), "Drawing: %s", selectedName);
     } else {

@@ -31,6 +31,7 @@ void Registry::load(const std::string &filename) {
     int elementCount = static_cast<int>(j.size());
     gpuData.resize(elementCount);
     names.resize(elementCount);
+    displayNames.resize(elementCount);
     singleClickFlags.resize(elementCount, false);
     hiddenFlags.resize(elementCount, false);
     maxLifeValues.resize(elementCount, 0);
@@ -74,6 +75,7 @@ void Registry::load(const std::string &filename) {
             int newSize = id + 1;
             gpuData.resize(newSize);
             names.resize(newSize);
+            displayNames.resize(newSize);
             singleClickFlags.resize(newSize, false);
             hiddenFlags.resize(newSize, false);
             maxLifeValues.resize(newSize, 0);
@@ -86,6 +88,13 @@ void Registry::load(const std::string &filename) {
 
         names[id] = key;
         nameToId[key] = id;
+
+        if (val.contains("displayName")) {
+            displayNames[id] = val["displayName"].get<std::string>();
+        }
+        else {
+            displayNames[id] = key;
+        }
 
         GPUElementData& d = gpuData[id];
 
